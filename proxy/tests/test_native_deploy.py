@@ -139,10 +139,10 @@ def test_webui_supervisorctl_default_single_word_unchanged(monkeypatch, tmp_path
 
 def test_native_supervisor_template_programs_and_ports():
     text = (BASE / "container" / "supervisord-native.conf.in").read_text(encoding="utf-8")
-    for program in ("musicdl", "netease", "lxserver", "lxmusic", "webui"):
+    for program in ("musicdl", "netease", "lxserver", "lxmusic", "webui", "mp3api"):
         assert f"[program:{program}]" in text
     # 与容器发布端口一致（proxy 契约不变）；lxserver 保持回环 8005
-    for port in ("8768", "8770", "8772", "8774", "8005"):
+    for port in ("8768", "8770", "8772", "8774", "8005", "8776"):
         assert port in text
     assert "autostart=false" in text
     assert "FNMUSIC_ENV_FILE=\"@REPO@/.env\"" in text

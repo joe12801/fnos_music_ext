@@ -131,7 +131,7 @@ class TestWizard:
         assert "wizard_webui_password" not in fields
         radio = next(it for it in items if it["type"] == "radio")
         values = {opt["value"] for opt in radio["options"]}
-        assert values == {"auto", "musicdl", "musicbox", "lxmusic"}
+        assert values == {"auto", "musicdl", "musicbox", "lxmusic", "mp3api"}
         assert radio["initValue"] == "auto"
 
     def test_fnpack_quirks(self, stage: Path):
@@ -306,6 +306,7 @@ class TestPayload:
             "lxmusic-service/source_cpu.py", "lxmusic-service/source_runtime.py",
             "lxmusic-service/verify_source.py", "lxmusic-service/source_worker.cjs",
             "lxmusic-service/lx_vm_bridge.cjs",
+            "mp3api-service/app.py", "mp3api-service/requirements.txt",
         ):
             assert (repo / rel).is_file(), f"payload 缺少运行所需文件 {rel}"
 

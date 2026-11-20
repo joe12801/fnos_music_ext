@@ -27,7 +27,8 @@ def supervisord_conf():
 def test_supervisord_programs_all_autostart_false(supervisord_conf):
     programs = sorted(s for s in supervisord_conf.sections() if s.startswith("program:"))
     assert programs == [
-        "program:lxmusic", "program:lxserver", "program:musicdl", "program:netease", "program:webui",
+        "program:lxmusic", "program:lxserver", "program:mp3api", "program:musicdl",
+        "program:netease", "program:webui",
     ]
     for section in programs:
         assert supervisord_conf.get(section, "autostart") == "false"
@@ -51,6 +52,7 @@ def test_supervisord_ports_and_directories(supervisord_conf):
         "musicdl": ("8001", "/srv/musicdl-service"),
         "lxmusic": ("8003", "/srv/lxmusic-service"),
         "webui": ("8004", "/srv/webui-service"),
+        "mp3api": ("8006", "/srv/mp3api-service"),
     }
     for prog, (port, directory) in expected.items():
         section = f"program:{prog}"
@@ -233,6 +235,7 @@ def entrypoint_env(tmp_path):
     ("FNMUSIC_MUSICDL_ENABLED=true\n", ["start musicdl"]),
     ("FNMUSIC_NETEASE_ENABLED=true\n", ["start netease"]),
     ("FNMUSIC_LX_ENABLED=true\n", ["start lxserver", "start lxmusic"]),
+    ("FNMUSIC_MP3API_ENABLED=true\n", ["start mp3api"]),
     # WebUI 独立开关
     ("FNMUSIC_LX_ENABLED=true\nFNMUSIC_WEBUI_ENABLED=true\n", ["start lxserver", "start lxmusic", "start webui"]),
     ("FNMUSIC_WEBUI_ENABLED=true\n", ["start webui"]),
@@ -341,6 +344,7 @@ def test_compose_single_service_layout():
         "127.0.0.1:8770:8002",
         "127.0.0.1:8772:8003",
         "127.0.0.1:8774:8004",
+        "127.0.0.1:8776:8006",
     ])
     raw = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     assert "0.0.0.0:8770" not in raw
@@ -368,7 +372,8 @@ def test_dockerfile_assembly():
     for pkg in ("nodejs", "ffmpeg", "supervisor"):
         assert pkg in text
     for req in ("musicdl-service/requirements.txt",
-                "lxmusic-service/requirements.txt", "webui-service/requirements.txt"):
+                "lxmusic-service/requirements.txt", "webui-service/requirements.txt",
+                "mp3api-service/requirements.txt"):
         assert req in text
     assert "netease-service/package.json" in text
     assert "container/lxserver.version" in text
@@ -389,7 +394,7 @@ def test_dockerfile_assembly():
     assert "lxmusic-service/js/bridge.js" not in text
     assert text.count("HEALTHCHECK") >= 1
     assert 'ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]' in text
-    assert "EXPOSE 8001 8002 8003 8004" in text
+    assert "EXPOSE 8001 8002 8003 8004 8006" in text
     # 非特权运行
     assert "USER appuser" in text
     # 数据卷与仓库挂载点；目录不可 world-writable（bind 挂载后跟宿主机权限）
@@ -446,7 +451,7 @@ def test_dockerfile_network_fallback_resilience():
     # 双源失败时必须报告备用 DNS 注入是否真正生效，区分「注入失败」与「源不可达」
     assert "注入未生效" in apt_step
     # pip 步骤：同样自带 DNS 自愈（resolv.conf 改写不跨 RUN 层）+ 官方 PyPI 回退
-    pip_step = text.split("# 四个服务的 Python 依赖并集")[1]
+    pip_step = text.split("# 五个服务的 Python 依赖并集")[1]
     assert "getent hosts" not in pip_step
     assert "223.5.5.5" in pip_step
     assert "https://pypi.org/simple" in pip_step
@@ -455,9 +460,10 @@ def test_dockerfile_network_fallback_resilience():
 def test_dockerignore_whitelist_build_context():
     text = (REPO_ROOT / ".dockerignore").read_text(encoding="utf-8")
     code_lines = [ln for ln in text.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
-    # 白名单模式：先忽略一切，再放行四个服务目录与 container/
+    # 白名单模式：先忽略一切，再放行五个服务目录与 container/
     assert code_lines[0] == "*"
-    for keep in ("!musicdl-service/", "!netease-service/", "!lxmusic-service/", "!webui-service/", "!container/"):
+    for keep in ("!musicdl-service/", "!netease-service/", "!lxmusic-service/",
+                 "!webui-service/", "!mp3api-service/", "!container/"):
         assert keep in code_lines
 
 

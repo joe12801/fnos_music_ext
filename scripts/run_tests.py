@@ -31,6 +31,7 @@ PHASES = (
         "webui": ("webui-service",),
         "musicdl": ("musicdl-service",),
         "lxmusic": ("lxmusic-service",),
+        "mp3api": ("mp3api-service",),
     },
     # 只含离线pytest用例；真实第三方脚本仍须单独显式授权矩阵CLI。
     {"infrastructure": ("container", "packaging/tests", "tests/runner", "tests/integration")},
@@ -38,6 +39,7 @@ PHASES = (
 SUITES = {name: paths for phase in PHASES for name, paths in phase.items()}
 COVERAGE_TARGETS = (
     "proxy", "lxmusic-service", "musicdl-service", "webui-service",
+    "mp3api-service",
 )
 PROXY_ROOT = "proxy/tests"
 # Files whose tests bind host-level resources (shell scripts, sockets, nginx,

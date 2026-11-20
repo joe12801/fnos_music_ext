@@ -31,7 +31,7 @@ def test_all_pytest_roots_run_exactly_once():
     # Directories, not a file allowlist: new tests in any suite are not lost.
     assert all((ROOT / path).is_dir() for path in scheduled)
     assert runner.PHASES[0] == {"proxy": ("proxy/tests",)}
-    assert set(runner.PHASES[1]) == {"webui", "musicdl", "lxmusic"}
+    assert set(runner.PHASES[1]) == {"webui", "musicdl", "lxmusic", "mp3api"}
     assert set(runner.PHASES[2]) == {"infrastructure"}
     # 安全矩阵不能只靠手工执行；目录收集也自动覆盖后续离线适配回归。
     assert "tests/integration" in runner.SUITES["infrastructure"]
@@ -143,7 +143,7 @@ def test_main_preserves_phase_barriers_and_deduplicates_selection(monkeypatch):
     proxy_phase, exclusive_phase, *rest = calls
     assert proxy_phase[0] and all(name.startswith("proxy-") for name in proxy_phase[0])
     assert len(exclusive_phase[0]) == 1 and exclusive_phase[1] == 1
-    assert rest == [(["webui", "musicdl", "lxmusic"], 1, False),
+    assert rest == [(["webui", "musicdl", "lxmusic", "mp3api"], 1, False),
                     (["infrastructure"], 1, False)]
     calls.clear()
     assert runner.main(["--suite", "lxmusic", "--suite", "lxmusic"]) == 0

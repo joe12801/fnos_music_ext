@@ -3,14 +3,16 @@ set -euo pipefail
 
 # ==============================================================================
 # fnmusic-ext 一键安装 / 配置（v2.0.0：Docker 单容器·按需加载）
-# - 仅支持 Docker 部署：三音源 + WebUI 合并为单容器 fnmusic-sources，
-#   supervisor 管理四个程序，只启动当前所选音源（切源秒级，不重建容器）
-# - 音源三选一（互斥单选，可随时在 WebUI 里切换）：
+# - 仅支持 Docker 部署：四音源 + WebUI 合并为单容器 fnmusic-sources，
+#   supervisor 管理六个程序，只启动当前所选音源（切源秒级，不重建容器）
+# - 音源四选一（互斥单选，可随时在 WebUI 里切换）：
 #     1 musicbox https://github.com/darknessomi/musicbox  (:8770 网易云，推荐扫码登录)
 #     2 musicdl  https://github.com/CharlesPikachu/musicdl (:8768 聚合, 可选平台)
 #     3 lxmusic  洛雪音乐自定义源（用户自带源 URL 解析播放）
+#     4 mp3api   自建 Music MP3 API（yt-dlp + ffmpeg + 本地缓存，:8776 适配器）
 #   musicdl 平台粒度: --sources musicdl-kuwo,musicdl-migu 或全局编号 --sources 2,4
 #   （全部平台编号见 musicdl-service/PLATFORMS.md）
+#   mp3api 需另填 MP3API_BASE_URL / MP3API_API_KEY（管理页「音乐源」内配置）
 # - 管理 Web UI（可选，端口 8774，仅本机；经飞牛登录的管理员打开）：
 #   源切换 / 平台选择 / 扫码登录 / 音质模式 / 边听边存 / LLM 配置
 # - 每日推荐默认采信音源原生推荐（网易每日推荐/榜单 + lxmusic 免登录榜单）；
@@ -20,6 +22,7 @@ set -euo pipefail
 #   ./install.sh                                        # 交互
 #   ./install.sh --sources musicdl --sources=2,4 形式同下
 #   ./install.sh --sources musicbox
+#   ./install.sh --sources mp3api                     # 第四音源：装后在管理页填上游地址/API Key
 #   ./install.sh --sources lxmusic --lx-source-url 'https://example.com/lx.js'
 #   ./install.sh --sources lxmusic --lx-source-url 'https://a/lx1.js,https://b/lx2.js'  # 多源同时激活
 #   ./install.sh --non-interactive --sources musicdl --webui \
@@ -87,6 +90,7 @@ ADOPT=0
 ENABLE_MUSICDL=0
 ENABLE_MUSICBOX=0
 ENABLE_LX=0
+ENABLE_MP3API=0
 # 平台粒度（parse_sources 填充）：空 = 未显式选择，沿用 .env 既有值/默认平台
 LX_PLATFORMS=""
 MDL_PLATFORMS=""
@@ -211,15 +215,18 @@ usage() {
     cat <<'EOF'
 用法: ./install.sh [选项]
 
-  --sources LIST         音源三选一（互斥，只能选一个源）：
+  --sources LIST         音源四选一（互斥，只能选一个源）：
                          1) musicbox  网易云音乐盒子（安装后扫码登录）
                          2) musicdl   聚合音源，可精确到平台：
                              --sources musicdl[-<平台短名>,...]
                              或全局编号 --sources 2,4（编号见 musicdl-service/PLATFORMS.md）
                          3) lxmusic   洛雪音乐自定义源（源脚本装后在管理页配置：
                              URL / 上传 .js / NAS 选择；--lx-source-url 仍可选）
+                         4) mp3api    自建 Music MP3 API 适配器（装后在管理页填
+                             MP3API_BASE_URL / MP3API_API_KEY；播放直连必须关闭）
                          示例: --sources musicbox
                                --sources musicdl-kuwo,musicdl-migu
+                               --sources mp3api
                                --sources lxmusic --lx-source-url https://example.com/lx.js
                                --sources lxmusic --lx-source-url 'https://a/lx1.js,https://b/lx2.js'（多源同时激活）
                                --sources lxmusic（无源安装，装后在管理页配置）
@@ -411,6 +418,7 @@ apply_source_row() {
     local provider="$1" short="$2"
     case "${provider}" in
         musicbox) ENABLE_MUSICBOX=1 ;;
+        mp3api) ENABLE_MP3API=1 ;;
         musicdl)
             ENABLE_MUSICDL=1
             MDL_EXPLICIT=1
@@ -427,7 +435,7 @@ apply_source_row() {
 
 print_featured_source_menu() {
     local id provider short full label star
-    echo "精选编号对照（v2.0.0 音源三选一；musicdl 源内可多选平台）:"
+    echo "精选编号对照（v2.0.0 音源四选一；musicdl 源内可多选平台）:"
     while IFS='|' read -r id provider short full label star; do
         [ -z "${id}" ] && continue
         [ "${star}" = "1" ] || continue
@@ -444,10 +452,10 @@ print_featured_source_menu() {
         esac
     done <<< "${SOURCE_PLATFORM_TABLE}"
     echo "完整编号见 musicdl-service/PLATFORMS.md（1=网易云, 2–58 及 64=musicdl, 59–63=lx；53 已退役）。"
-    echo "交互向导请输入 1/2/3 三选一；musicdl 平台用 2,4 这类编号，不可与 1 或 59–63 混选。"
+    echo "交互向导请输入 1/2/3/4 四选一；musicdl 平台用 2,4 这类编号，不可与 1 或 59–63 混选。"
 }
 
-# musicdl 平台多选子菜单（v2.0.0：音源三选一后，musicdl 源内可继续多选平台）
+# musicdl 平台多选子菜单（v2.0.0：音源四选一后，musicdl 源内可继续多选平台）
 print_featured_mdl_menu() {
     local id provider short full label star
     echo "  精选平台（musicdl 源内可多选，逗号分隔编号）:"
@@ -488,21 +496,23 @@ parse_sources() {
     [ -n "${raw}" ] && [ "${raw}" != "musicdl" ] && explicit=1
 
     if [ "${explicit}" -eq 0 ] && [ -n "${BASE_DIR:-}" ] && [ -f "${env_file}" ]; then
-        local keep_mdl keep_box keep_lx
+        local keep_mdl keep_box keep_lx keep_mp3api
         keep_mdl="$(read_dotenv_value "${env_file}" "FNMUSIC_MUSICDL_ENABLED" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
         keep_box="$(read_dotenv_value "${env_file}" "FNMUSIC_NETEASE_ENABLED" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
         keep_lx="$(read_dotenv_value "${env_file}" "FNMUSIC_LX_ENABLED" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+        keep_mp3api="$(read_dotenv_value "${env_file}" "FNMUSIC_MP3API_ENABLED" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
         local has_keep=0
-        ENABLE_MUSICDL=0; ENABLE_MUSICBOX=0; ENABLE_LX=0
+        ENABLE_MUSICDL=0; ENABLE_MUSICBOX=0; ENABLE_LX=0; ENABLE_MP3API=0
         case "${keep_box}" in true|1|yes|on) ENABLE_MUSICBOX=1; has_keep=1 ;; esac
         case "${keep_lx}" in true|1|yes|on) ENABLE_LX=1; has_keep=1 ;; esac
         case "${keep_mdl}" in true|1|yes|on) ENABLE_MUSICDL=1; has_keep=1 ;; esac
+        case "${keep_mp3api}" in true|1|yes|on) ENABLE_MP3API=1; has_keep=1 ;; esac
         if [ "${has_keep}" -eq 1 ]; then
             KEEP_SOURCES_FROM_ENV=1
             MDL_EXPLICIT=0
             MDL_PLATFORMS=""
             LX_PLATFORMS=""
-            log_info "检测到存量音源配置 (musicdl=${ENABLE_MUSICDL} musicbox=${ENABLE_MUSICBOX} lx=${ENABLE_LX})，覆盖安装保留现有音源选择"
+            log_info "检测到存量音源配置 (musicdl=${ENABLE_MUSICDL} musicbox=${ENABLE_MUSICBOX} lx=${ENABLE_LX} mp3api=${ENABLE_MP3API})，覆盖安装保留现有音源选择"
             return 0
         fi
     fi
@@ -510,6 +520,7 @@ parse_sources() {
     ENABLE_MUSICDL=0
     ENABLE_MUSICBOX=0
     ENABLE_LX=0
+    ENABLE_MP3API=0
     LX_PLATFORMS=""
     MDL_PLATFORMS=""
     LX_EXPLICIT=0
@@ -529,13 +540,15 @@ parse_sources() {
         case "${part}" in
             netease|musicbox|netease-musicbox)
                 ENABLE_MUSICBOX=1; picked+=("netease") ;;
+            mp3api|mp3-api|music-mp3-api|musicmp3api)
+                ENABLE_MP3API=1; picked+=("mp3api") ;;
             musicdl|mdl)
                 ENABLE_MUSICDL=1; picked+=("musicdl") ;;
             lx|lxmusic)
                 ENABLE_LX=1; picked+=("lxmusic") ;;
             lx-all|lxmusic-all|lx-*|lxmusic-*)
                 ENABLE_LX=1; picked+=("lxmusic")
-                # lx 平台 token 仅作 LX_SOURCES 显式覆盖（音源仍是三选一里的 lxmusic）
+                # lx 平台 token 仅作 LX_SOURCES 显式覆盖（音源仍是四选一里的 lxmusic）
                 if [ "${part}" = "lx-all" ] || [ "${part}" = "lxmusic-all" ]; then
                     LX_EXPLICIT=1
                     for code in kg wy mg kw; do lx_merge "${code}"; done
@@ -580,17 +593,18 @@ parse_sources() {
                 ;;
         esac
     done
-    if [ "${ENABLE_MUSICDL}" -eq 0 ] && [ "${ENABLE_MUSICBOX}" -eq 0 ] && [ "${ENABLE_LX}" -eq 0 ]; then
-        log_err "至少选择一个音源（musicbox / musicdl / lxmusic）"
+    if [ "${ENABLE_MUSICDL}" -eq 0 ] && [ "${ENABLE_MUSICBOX}" -eq 0 ] \
+       && [ "${ENABLE_LX}" -eq 0 ] && [ "${ENABLE_MP3API}" -eq 0 ]; then
+        log_err "至少选择一个音源（musicbox / musicdl / lxmusic / mp3api）"
         exit 1
     fi
-    # v2.0.0 三源互斥：token 只能映射到一个 provider，跨 provider 直接拒绝
+    # v2.0.0 四源互斥：token 只能映射到一个 provider，跨 provider 直接拒绝
     local unique_providers
     unique_providers="$(printf '%s\n' "${picked[@]}" | sort -u | tr '\n' ' ' | tr -s ' ')"
     local provider_count
     provider_count="$(printf '%s\n' "${picked[@]}" | sort -u | wc -l | tr -d ' ')"
     if [ "${provider_count}" -gt 1 ]; then
-        log_err "音源三选一：检测到同时选择了 ${unique_providers}(v2.0.0 起三个音源互斥单选)"
+        log_err "音源四选一：检测到同时选择了 ${unique_providers}(v2.0.0 起四个音源互斥单选)"
         log_err "请只保留一个音源重新执行；已装 WebUI 时可随时在 WebUI(8774) 里秒级切换音源"
         log_err "旧版本 .env 中的多源配置请重新选择一个后继续"
         exit 1
@@ -1055,30 +1069,35 @@ if [ "${NON_INTERACTIVE}" -eq 0 ]; then
     echo " 音源: ${MUSICBOX_REPO}"
     echo "       ${MUSICDL_REPO}"
     echo "       lxmusic — 洛雪音乐自定义源（装后在管理页配置源脚本）"
+    echo "       mp3api  — 自建 Music MP3 API（装后在管理页填上游地址/API Key）"
     echo "============================================================"
     if [ -z "${SOURCES_RAW}" ]; then
-        echo "【音源三选一】（互斥单选；安装后可在 WebUI 里随时切换，秒级生效）"
+        echo "【音源四选一】（互斥单选；安装后可在 WebUI 里随时切换，秒级生效）"
         echo "  1) musicbox — 网易云音乐盒子（高品质/无损/歌词封面；推荐安装后扫码登录）"
         echo "  2) musicdl  — 聚合音源（多平台可选：酷我/咪咕/酷狗/QQ/B站等）"
         echo "  3) lxmusic  — 洛雪音乐自定义源（解析播放只走用户源；源脚本装后在管理页配置：URL / 上传 .js / NAS 选择）"
+        echo "  4) mp3api   — 自建 Music MP3 API（yt-dlp + ffmpeg + 本地缓存；需自备上游服务与 API Key）"
         def_choice="2"
         if [ -f "${BASE_DIR}/.env" ]; then
             prev_mdl="$(read_dotenv_value "${BASE_DIR}/.env" "FNMUSIC_MUSICDL_ENABLED" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
             prev_box="$(read_dotenv_value "${BASE_DIR}/.env" "FNMUSIC_NETEASE_ENABLED" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
             prev_lx="$(read_dotenv_value "${BASE_DIR}/.env" "FNMUSIC_LX_ENABLED" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+            prev_mp3api="$(read_dotenv_value "${BASE_DIR}/.env" "FNMUSIC_MP3API_ENABLED" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
             case "${prev_box}" in true|1|yes|on) def_choice="1" ;; esac
             case "${prev_lx}" in true|1|yes|on) def_choice="3" ;; esac
+            case "${prev_mp3api}" in true|1|yes|on) def_choice="4" ;; esac
             case "${prev_mdl}" in true|1|yes|on) def_choice="2" ;; esac
         fi
         # 直接读原始输入（不经 prompt 归并默认值）：键入任何选项都算显式选择，
         # 不被存量 .env 的音源继承逻辑覆盖；回车才沿用推导出的默认值。
         local_choice=""
-        read -r -p "请选择音源 (输入 1/2/3) [${def_choice}]: " local_choice || true
+        read -r -p "请选择音源 (输入 1/2/3/4) [${def_choice}]: " local_choice || true
         [ -n "${local_choice}" ] && SOURCES_EXPLICIT=1
         local_choice="${local_choice:-${def_choice}}"
         case "${local_choice}" in
             1) SOURCES_RAW="musicbox" ;;
             3) SOURCES_RAW="lxmusic" ;;
+            4) SOURCES_RAW="mp3api" ;;
             *) SOURCES_RAW="musicdl" ;;
         esac
         if [ "${SOURCES_RAW}" = "musicdl" ]; then
@@ -1231,22 +1250,23 @@ SELECTED=""
 [ "${ENABLE_MUSICBOX}" -eq 1 ] && SELECTED="${SELECTED} netease[8770]"
 [ "${ENABLE_MUSICDL}" -eq 1 ] && SELECTED="${SELECTED} musicdl[8768]${MDL_SUMMARY}"
 [ "${ENABLE_LX}" -eq 1 ] && SELECTED="${SELECTED} lxmusic[8772]${LX_SUMMARY}"
+[ "${ENABLE_MP3API}" -eq 1 ] && SELECTED="${SELECTED} mp3api[8776]"
 
 # Reapply after retained-data restoration, before any service starts.
 configure_app_logs || { log_err "无法安全配置私有共享日志目录: ${APP_LOG_DIR}"; exit 1; }
 
-# v2.0.0 升级检测：旧 .env 三源并存（多 true）时强制重新三选一
+# v2.0.0 升级检测：旧 .env 三源并存（多 true）时强制重新四选一
 if [ -f "${BASE_DIR}/.env" ]; then
-    legacy_flags="$(grep -E "^\s*(export\s+)?FNMUSIC_(MUSICDL|NETEASE|LX)_ENABLED=" "${BASE_DIR}/.env" 2>/dev/null \
+    legacy_flags="$(grep -E "^\s*(export\s+)?FNMUSIC_(MUSICDL|NETEASE|LX|MP3API)_ENABLED=" "${BASE_DIR}/.env" 2>/dev/null \
         | tail -20 | sed -e "s/^.*=//" -e "s/['\"]//g" | tr '[:upper:]' '[:lower:]' \
         | grep -c -E '^(true|1|yes)$' || true)"
     if [ "${legacy_flags:-0}" -gt 1 ]; then
         if [ "${NON_INTERACTIVE}" -eq 1 ]; then
-            log_err "检测到旧版 .env 同时启用了多个音源；v2.0.0 起三音源互斥单选。"
-            log_err "请用 --sources 指定唯一音源后重试（musicbox / musicdl / lxmusic）。"
+            log_err "检测到旧版 .env 同时启用了多个音源；v2.0.0 起四音源互斥单选。"
+            log_err "请用 --sources 指定唯一音源后重试（musicbox / musicdl / lxmusic / mp3api）。"
             exit 1
         fi
-        log_warn "检测到旧版 .env 同时启用了多个音源；v2.0.0 起三音源互斥单选，请重新选择。"
+        log_warn "检测到旧版 .env 同时启用了多个音源；v2.0.0 起四音源互斥单选，请重新选择。"
     fi
 fi
 
@@ -1284,14 +1304,17 @@ chmod 0644 \
     "${BASE_DIR}/lxmusic-service/source_worker.cjs" "${BASE_DIR}/lxmusic-service/lx_vm_bridge.cjs" \
     "${BASE_DIR}/webui-service/app.py" "${BASE_DIR}/webui-service/static/index.html" \
     "${BASE_DIR}/webui-service/static/app.js" "${BASE_DIR}/webui-service/static/style.css" \
+    "${BASE_DIR}/mp3api-service/app.py" \
     2>/dev/null || true
 
 MUSICDL_FLAG="false"
 MUSICBOX_FLAG="false"
 LX_FLAG="false"
+MP3API_FLAG="false"
 [ "${ENABLE_MUSICDL}" -eq 1 ] && MUSICDL_FLAG="true"
 [ "${ENABLE_MUSICBOX}" -eq 1 ] && MUSICBOX_FLAG="true"
 [ "${ENABLE_LX}" -eq 1 ] && LX_FLAG="true"
+[ "${ENABLE_MP3API}" -eq 1 ] && MP3API_FLAG="true"
 WEBUI_FLAG="false"
 [ "${WEBUI_CHOICE}" = "yes" ] && WEBUI_FLAG="true"
 
@@ -1368,6 +1391,14 @@ ENV_DESIRED="$(mktemp)"
     echo "FNMUSIC_TEE_CACHE_MAX='2'"
     echo "FNMUSIC_LX_ENABLED='${LX_FLAG}'"
     echo "FNMUSIC_LX_URL='http://127.0.0.1:8772'"
+    echo "FNMUSIC_MP3API_ENABLED='${MP3API_FLAG}'"
+    echo "FNMUSIC_MP3API_URL='http://127.0.0.1:8776'"
+    # 第四音源连接参数：env_merge 对已存在的键一律保留用户在管理页保存过的值
+    # （这些键不进 ENV_EXPLICIT），因此重装不会清空 API Key 或自定义上游地址。
+    echo "MP3API_BASE_URL='http://127.0.0.1:8765'"
+    echo "MP3API_API_KEY=''"
+    echo "MP3API_BITRATE='192'"
+    echo "MP3API_MAX_DURATION='900'"
     if [ -n "${INTERNAL_TOKEN}" ]; then echo "FNMUSIC_INTERNAL_TOKEN='$(dotenv_escape "${INTERNAL_TOKEN}")'"; fi
     if [ "${ENABLE_LX}" -eq 1 ] && [ -n "${LX_SOURCE_URLS}" ]; then
         # 源种子（全部标记激活）：容器首启/重启时按此自愈恢复多源激活；
@@ -1401,7 +1432,7 @@ ENV_DESIRED="$(mktemp)"
 # 例外：覆盖安装且存量 .env 已有音源配置（KEEP_SOURCES_FROM_ENV=1）时，三开关不进
 # explicit——env 合并按"非 explicit 键保留已有值"处理，音源选择以用户存量为准，
 # 向导默认值只影响全新安装。
-ENV_EXPLICIT="FNMUSIC_MUSICDL_ENABLED,FNMUSIC_NETEASE_ENABLED,FNMUSIC_LX_ENABLED,FNMUSIC_WEBUI_ENABLED,FNMUSIC_VERSION,FNMUSIC_DEPLOY_MODE,FNMUSIC_SEARCH_PROBE"
+ENV_EXPLICIT="FNMUSIC_MUSICDL_ENABLED,FNMUSIC_NETEASE_ENABLED,FNMUSIC_LX_ENABLED,FNMUSIC_MP3API_ENABLED,FNMUSIC_WEBUI_ENABLED,FNMUSIC_VERSION,FNMUSIC_DEPLOY_MODE,FNMUSIC_SEARCH_PROBE"
 if [ "${KEEP_SOURCES_FROM_ENV:-0}" -eq 1 ]; then
     ENV_EXPLICIT="FNMUSIC_WEBUI_ENABLED,FNMUSIC_VERSION,FNMUSIC_DEPLOY_MODE,FNMUSIC_SEARCH_PROBE"
 fi
@@ -1610,6 +1641,7 @@ sources_quick_ready() {
     [ "${ENABLE_MUSICBOX}" -eq 1 ] && urls="${urls} http://127.0.0.1:8770/healthz"
     [ "${ENABLE_MUSICDL}" -eq 1 ] && urls="${urls} http://127.0.0.1:8768/healthz"
     [ "${ENABLE_LX}" -eq 1 ] && urls="${urls} http://127.0.0.1:8772/healthz"
+    [ "${ENABLE_MP3API}" -eq 1 ] && urls="${urls} http://127.0.0.1:8776/healthz"
     [ "${WEBUI_FLAG}" = "true" ] && urls="${urls} http://127.0.0.1:8774/healthz"
     # shellcheck disable=SC2086
     for url in ${urls}; do
@@ -1672,6 +1704,16 @@ install_sources_container() {
             log_info "lxmusic 已就绪 http://127.0.0.1:8772/healthz"
         else
             log_err "等待 lxmusic healthz 超时"
+            diagnose_sources_container "${CONTAINER_NAME}"
+            return 1
+        fi
+    fi
+    if [ "${ENABLE_MP3API}" -eq 1 ]; then
+        waited=1
+        if wait_http "http://127.0.0.1:8776/healthz" 60 2; then
+            log_info "mp3api 已就绪 http://127.0.0.1:8776/healthz"
+        else
+            log_err "等待 mp3api healthz 超时（检查 MP3API_BASE_URL / MP3API_API_KEY 与上游服务）"
             diagnose_sources_container "${CONTAINER_NAME}"
             return 1
         fi
@@ -1747,7 +1789,7 @@ print(",".join(a))
 }
 
 # --- v2.8.0a 原生（无 Docker）安装：宿主机 systemd unit + supervisord 按需加载 ---
-# 与容器形态功能等价：同一份 .env / sources-data / 发布端口（127.0.0.1:8768/8770/8772/8774），
+# 与容器形态功能等价：同一份 .env / sources-data / 发布端口（127.0.0.1:8768/8770/8772/8774/8776），
 # proxy 侧 URL 与 healthz 契约不变；差异仅在进程承载方式（supervisord 模板见
 # container/supervisord-native.conf.in，unit 模板见 fnmusic-sources-native.service.in）。
 
@@ -1838,6 +1880,16 @@ install_sources_native() {
             log_info "lxmusic 已就绪 http://127.0.0.1:8772/healthz"
         else
             log_err "等待 lxmusic healthz 超时"
+            diagnose_native
+            return 1
+        fi
+    fi
+    if [ "${ENABLE_MP3API}" -eq 1 ]; then
+        waited=1
+        if wait_http "http://127.0.0.1:8776/healthz" 60 2; then
+            log_info "mp3api 已就绪 http://127.0.0.1:8776/healthz"
+        else
+            log_err "等待 mp3api healthz 超时（检查 MP3API_BASE_URL / MP3API_API_KEY 与上游服务）"
             diagnose_native
             return 1
         fi
@@ -1995,6 +2047,7 @@ log_info "------------------------------------------------------------"
 [ "${ENABLE_MUSICBOX}" -eq 1 ] && log_info "  • netease   [8770] 网易云音源     http://127.0.0.1:8770/healthz"
 [ "${ENABLE_MUSICDL}" -eq 1 ] && log_info "  • musicdl   [8768] 聚合音源${MDL_SUMMARY:+ 平台${MDL_SUMMARY}}   http://127.0.0.1:8768/healthz"
 [ "${ENABLE_LX}" -eq 1 ] && log_info "  • lxmusic   [8772] 洛雪自定义源${LX_SUMMARY:+ 平台${LX_SUMMARY}}   http://127.0.0.1:8772/healthz"
+[ "${ENABLE_MP3API}" -eq 1 ] && log_info "  • mp3api    [8776] 自建 Music MP3 API 适配器   http://127.0.0.1:8776/healthz"
 if [ "${WEBUI_FLAG}" = "true" ]; then
     log_info "  • WebUI     [8774] 管理界面      飞牛桌面「fnMusic 扩展管理」（仅管理员）"
 fi
@@ -2012,7 +2065,7 @@ log_info "   打开飞牛音乐 Web 端或手机 App，在搜索框中搜索歌�
 log_info "   点击在线源歌曲试听，确认可以流畅播放并显示歌词与封面。"
 if [ "${WEBUI_FLAG}" = "true" ]; then
     log_info "3. 管理 Web UI：飞牛桌面「fnMusic 扩展管理」，或已登录管理员打开 /app/fnmusic-ext"
-    log_info "   • 音源三选一随时切换（秒级）、musicdl 平台多选、网易扫码登录"
+    log_info "   • 音源四选一随时切换（秒级）、musicdl 平台多选、网易扫码登录"
     log_info "   • 音质模式（高音质/平衡/流畅）、边听边存、推荐开关、LLM 配置"
 fi
 if [ "${ENABLE_MUSICBOX}" -eq 1 ]; then

@@ -111,7 +111,7 @@
       <section class="page" id="page-source">
         <div class="page-head">
           <div>
-            <h2><span>音乐源（三选一）</span><button class="help-btn" type="button" data-help="providers" aria-label="音乐源帮助">?</button></h2>
+            <h2><span>音乐源（四选一）</span><button class="help-btn" type="button" data-help="providers" aria-label="音乐源帮助">?</button></h2>
             <p class="page-sub">主音源决定搜索与在线播放走哪个渠道。选好后点底部「保存并生效」，系统会自动切换对应服务进程。</p>
           </div>
         </div>
@@ -130,6 +130,11 @@
             <input type="radio" name="provider" value="lxmusic">
             <div class="provider-head">洛雪自定义源</div>
             <div class="provider-desc">导入洛雪 (LX Music) 音源脚本，支持多源自动接力</div>
+          </label>
+          <label class="provider-card" data-provider="mp3api">
+            <input type="radio" name="provider" value="mp3api">
+            <div class="provider-head">Music MP3 API</div>
+            <div class="provider-desc">自建 YouTube 音乐 API（yt-dlp + 本地缓存），支持局域网或远程部署</div>
           </label>
         </div>
 
@@ -203,6 +208,32 @@
                 </table>
               </div>
             </div>
+          </div>
+        </div>
+
+        <!-- mp3api：自建 Music MP3 API 连接参数 -->
+        <div class="subpanel" id="panel-mp3api" hidden>
+          <div class="card">
+            <div class="card-title"><span>连接自建 Music MP3 API</span></div>
+            <div class="btn-row">
+              <label class="pt-field"><span>代理访问适配器地址</span><input class="input" id="mp3api-url" placeholder="http://127.0.0.1:8776"></label>
+              <label class="pt-field"><span>上游 API 地址</span><input class="input" id="mp3api-base-url" placeholder="http://127.0.0.1:8765 或 https://域名"></label>
+            </div>
+            <div class="btn-row">
+              <label class="pt-field"><span>上游 API Key</span><input class="input" id="mp3api-api-key" type="password" placeholder="留空表示上游未启用鉴权"></label>
+              <label class="pt-field pt-field-num"><span>码率 kbps</span>
+                <select class="input" id="mp3api-bitrate">
+                  <option value="64">64</option>
+                  <option value="96">96</option>
+                  <option value="128">128</option>
+                  <option value="192">192</option>
+                  <option value="256">256</option>
+                  <option value="320">320</option>
+                </select>
+              </label>
+              <label class="pt-field pt-field-num"><span>最长时长（秒）</span><input class="input" id="mp3api-max-duration" type="number" min="0" max="86400" value="900"></label>
+            </div>
+            <p class="hint">API Key 只保存在 NAS 的 .env 中，不会下发给客户端。<b>播放直连（Beta）必须保持关闭</b>：适配器不暴露带密钥的上游地址。首次点歌需要下载与转码，请耐心等待。详见 <code>mp3api-service/README.md</code>。</p>
           </div>
         </div>
 
@@ -770,7 +801,7 @@
     <p><b>服务连通性检查</b>会实际访问各组件的健康接口。若某项显示不可达，先看卡片里的原因，再检查对应音源是否配置正确。</p>
   </template>
   <template data-help-id="providers">
-    <p><b>一句话：</b>主音源三选一，决定平时搜歌、听歌走哪个渠道。切换后点底部「保存并生效」，系统会自动切换对应进程。</p>
+    <p><b>一句话：</b>主音源四选一，决定平时搜歌、听歌走哪个渠道。切换后点底部「保存并生效」，系统会自动切换对应进程。第四个「Music MP3 API」是自建上游服务的适配器，需要自行部署上游并填写地址与 API Key。</p>
     <p><b>怎么选？</b><br>· <b>网易云音乐</b>：有网易账号/会员，想同步歌单与每日推荐。<br>· <b>多平台聚合 (musicdl)</b>：不想登录，一次搜酷我、酷狗、QQ 等多个平台。<br>· <b>洛雪自定义源</b>：手里有洛雪 <code>.js</code> 音源脚本的进阶玩家。</p>
   </template>
   <template data-help-id="netease-login">

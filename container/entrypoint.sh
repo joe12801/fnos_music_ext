@@ -118,7 +118,7 @@ wait_ready() {
     return 1
 }
 
-# 三选一音源：只启动 .env 选中的那个（多开视为异常，全部忽略只取第一个命中）
+# 四选一音源：只启动 .env 选中的那个（多开视为异常，全部忽略只取第一个命中）
 if [ "$(env_flag FNMUSIC_MUSICDL_ENABLED)" = "true" ]; then
     start_prog musicdl
 elif [ "$(env_flag FNMUSIC_NETEASE_ENABLED)" = "true" ]; then
@@ -128,8 +128,12 @@ elif [ "$(env_flag FNMUSIC_LX_ENABLED)" = "true" ]; then
     start_prog lxmusic
     # 有界等待整条链路就绪；失败只记录，不停进程也不清空用户音源。
     wait_ready lxmusic "$LXMUSIC_HEALTH_URL" || true
+elif [ "$(env_flag FNMUSIC_MP3API_ENABLED)" = "true" ]; then
+    # 第四音源：mp3api-service 自行只读 /repo/.env 取上游地址与 API Key，
+    # 这里只需拉起进程，不向 supervisor 环境注入任何密钥。
+    start_prog mp3api
 else
-    log "未配置任何音源（FNMUSIC_MUSICDL_ENABLED/FNMUSIC_NETEASE_ENABLED/FNMUSIC_LX_ENABLED 均未启用）"
+    log "未配置任何音源（FNMUSIC_MUSICDL_ENABLED/FNMUSIC_NETEASE_ENABLED/FNMUSIC_LX_ENABLED/FNMUSIC_MP3API_ENABLED 均未启用）"
 fi
 
 # 网易云歌单常驻（issue #38）：当前音源不是 musicbox 但勾选常驻，且有网易

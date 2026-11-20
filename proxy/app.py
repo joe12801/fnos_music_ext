@@ -205,6 +205,9 @@ CONF = {
     "netease_url": os.environ.get("FNMUSIC_NETEASE_URL") or os.environ.get("FNMUSIC_MUSICBOX_URL", "http://127.0.0.1:8770"),
     "musicbox_url": os.environ.get("FNMUSIC_NETEASE_URL") or os.environ.get("FNMUSIC_MUSICBOX_URL", "http://127.0.0.1:8770"),
     "lx_url": os.environ.get("FNMUSIC_LX_URL", "http://127.0.0.1:8772"),
+    # 第四音源：Music MP3 API 适配器（mp3api-service），复用 musicdl 的 HTTP 契约
+    "mp3api_url": os.environ.get("FNMUSIC_MP3API_URL", "http://127.0.0.1:8776"),
+    "mp3api_enabled": os.environ.get("FNMUSIC_MP3API_ENABLED", "false").strip().lower() in ("true", "1", "yes"),
     "musicdl_enabled": os.environ.get("FNMUSIC_MUSICDL_ENABLED", "false").strip().lower() in ("true", "1", "yes"),
     "netease_enabled": os.environ.get("FNMUSIC_NETEASE_ENABLED", "false").strip().lower() in ("true", "1", "yes"),
     "lx_enabled": os.environ.get("FNMUSIC_LX_ENABLED", "false").strip().lower() in ("true", "1", "yes"),
@@ -665,6 +668,7 @@ _ENV_WATCH_KEYS: dict[str, tuple[str, str]] = {
     "FNMUSIC_MUSICDL_ENABLED": ("musicdl_enabled", "bool"),
     "FNMUSIC_NETEASE_ENABLED": ("netease_enabled", "bool"),
     "FNMUSIC_LX_ENABLED": ("lx_enabled", "bool"),
+    "FNMUSIC_MP3API_ENABLED": ("mp3api_enabled", "bool"),
     "FNMUSIC_NETEASE_DIRECT_PLAY": ("netease_direct_play", "direct_bool"),
     "FNMUSIC_MUSICDL_DIRECT_PLAY": ("musicdl_direct_play", "direct_bool"),
     "FNMUSIC_MUSICDL_OFFICIAL_SEARCH": ("musicdl_official_search", "bool"),
@@ -1033,7 +1037,7 @@ _LX_CONFIG_KEYS = {"lx_enabled", "lx_quality", "play_quality", "quality_mode", "
 _DL_CONFIG_KEYS = {
     "play_quality", "download_quality", "quality_mode", "dl_quality",
     "netease_quality", "lx_quality", "lx_enabled", "netease_enabled", "musicdl_enabled",
-    "online_sources", "lx_sources", "lx_source_url", "lx_source_list",
+    "mp3api_enabled", "online_sources", "lx_sources", "lx_source_url", "lx_source_list",
 }
 
 
@@ -1071,8 +1075,8 @@ def effective_download_quality_conf() -> str:
     }
     return qp.effective_download_quality(values)
 _SOURCE_CONF_KEYS = {
-    "musicdl_enabled", "netease_enabled", "lx_enabled", "online_sources", "lx_sources",
-    "lx_source_url", "lx_source_list",
+    "musicdl_enabled", "netease_enabled", "lx_enabled", "mp3api_enabled", "online_sources",
+    "lx_sources", "lx_source_url", "lx_source_list",
 }
 _DIRECT_PLAY_CONF_KEYS = {
     "netease": "netease_direct_play",
@@ -1368,7 +1372,7 @@ def _source_enabled(guid: str) -> bool:
     if source == "netease":
         if not _netease_runtime_usable():
             return False
-    elif not CONF.get({"lx": "lx_enabled"}.get(source, "musicdl_enabled")):
+    elif not CONF.get({"lx": "lx_enabled", "mp3api": "mp3api_enabled"}.get(source, "musicdl_enabled")):
         return False
     if source == "lx":
         # lx 平台白名单（online:lx:<platform>:<id>）；未配置 = 跟随 lx 服务全部已启用平台
@@ -1377,7 +1381,8 @@ def _source_enabled(guid: str) -> bool:
             parts = guid.split(":")
             return len(parts) >= 4 and parts[2] in selected
         return True
-    if source != "netease" and CONF.get("online_sources"):
+    # mp3api 是独立音源，不受 musicdl 平台白名单 (FNMUSIC_ONLINE_SOURCES) 约束
+    if source not in ("netease", "mp3api") and CONF.get("online_sources"):
         selected = {name.strip().lower().removesuffix("musicclient") for name in str(CONF["online_sources"]).split(",")}
         return source.lower() in selected
     return True
@@ -1667,6 +1672,7 @@ def source_from_online_guid(guid: str) -> str:
 _SOURCE_TAG_NETEASE = "[music box] "
 _SOURCE_TAG_MUSICDL = "[dl] "
 _SOURCE_TAG_LX_FALLBACK = "[lx] "
+_SOURCE_TAG_MP3API = "[mp3] "
 # issue #57：无 VIP 权益账号的网易 VIP 曲目展示标记（点播只有试听，给用户预期）。
 # 独立于来源标记：所有出口的 VO 都可携带；入库/收藏命名前经 strip_source_tag 剥离。
 _SOURCE_TAG_VIP = "[VIP] "
@@ -1831,6 +1837,8 @@ def source_display_prefix(src: str, item: dict | None = None) -> str:
             return f"[{script or 'lx'}-{platform}] "
         remark = _lx_source_remark()
         return f"[{remark}] " if remark else _SOURCE_TAG_LX_FALLBACK
+    if s == "mp3api":
+        return _SOURCE_TAG_MP3API
     if s:
         return _SOURCE_TAG_MUSICDL
     return ""
@@ -1844,7 +1852,7 @@ def strip_source_tag(title: str) -> str:
     业务命名前必须剥净。"""
     t = str(title or "")
     candidates = [_SOURCE_TAG_NETEASE, _SOURCE_TAG_MUSICDL, _SOURCE_TAG_LX_FALLBACK,
-                  _SOURCE_TAG_VIP, *_LX_DISPLAY_TAGS]
+                  _SOURCE_TAG_MP3API, _SOURCE_TAG_VIP, *_LX_DISPLAY_TAGS]
     script_parts = {"lx", *_LX_SCRIPT_MAP_CACHE["by_platform"].values()}
     for entry in _lx_source_entries():
         name = str(entry.get("name") or "").strip()
@@ -3507,9 +3515,16 @@ def get_upstream_client(fastapi_app: FastAPI) -> httpx.AsyncClient:
 
 
 def get_musicdl_client(fastapi_app: FastAPI) -> httpx.AsyncClient:
+    # mp3api 音源复用 musicdl 的全部取链 / Range / 转码链路，只把目标地址与超时
+    # 切到适配器；首次下载 + 转码可能远超过 musicdl 的 45s。
+    # 运行期 WebUI 切源会热重载 CONF，因此每次都校验 base_url，避免复用旧 client。
+    if CONF.get("mp3api_enabled"):
+        base, timeout = CONF["mp3api_url"], 300.0
+    else:
+        base, timeout = CONF["musicdl_url"], 45.0
     client = getattr(fastapi_app.state, "musicdl_client", None)
-    if client is None:
-        client = httpx.AsyncClient(base_url=CONF["musicdl_url"], timeout=45.0)
+    if client is None or str(client.base_url).rstrip("/") != str(base).rstrip("/"):
+        client = httpx.AsyncClient(base_url=base, timeout=timeout)
         fastapi_app.state.musicdl_client = client
     return client
 
@@ -6151,7 +6166,8 @@ async def _proxy_diagnostic_status() -> dict:
     return {"ok": True, "pid": os.getpid(), "version": get_version(),
             "checked_at": int(time.time()), "takeover": takeover, "upstream": official,
             "providers": [name for name, key in (("musicdl", "musicdl_enabled"),
-                          ("netease", "netease_enabled"), ("musicbox", "netease_enabled"), ("lxmusic", "lx_enabled")) if CONF.get(key)],
+                          ("netease", "netease_enabled"), ("musicbox", "netease_enabled"),
+                          ("lxmusic", "lx_enabled"), ("mp3api", "mp3api_enabled")) if CONF.get(key)],
             "search_timeout_s": CONF["search_timeout"]}
 
 
@@ -6174,7 +6190,8 @@ async def log_client_requests(request: Request, call_next):
                 query_chars=len(extract_keyword(request)),
                 musicdl=bool(CONF.get("musicdl_enabled")),
                 netease=bool(CONF.get("netease_enabled")),
-                musicbox=bool(CONF.get("netease_enabled")), lx=bool(CONF.get("lx_enabled")))
+                musicbox=bool(CONF.get("netease_enabled")), lx=bool(CONF.get("lx_enabled")),
+                mp3api=bool(CONF.get("mp3api_enabled")))
     try:
         response = await call_next(request)
     except BaseException as exc:
@@ -6238,7 +6255,8 @@ async def ext_healthz(request: Request):
               ("musicdl", CONF.get("musicdl_enabled"), get_musicdl_client, "/healthz"),
               # 网易云歌单常驻：netease 非当前音源时仍是健康检查的一部分（issue #38）
               ("netease", _netease_runtime_usable(), get_netease_client, "/healthz"),
-              ("lxmusic", CONF.get("lx_enabled"), get_lx_client, "/healthz")]
+              ("lxmusic", CONF.get("lx_enabled"), get_lx_client, "/healthz"),
+              ("mp3api", CONF.get("mp3api_enabled"), get_musicdl_client, "/healthz")]
     enabled = [(name, getter, path) for name, on, getter, path in checks if on]
     results = await asyncio.gather(*(probe(name, getter(request.app), path) for name, getter, path in enabled))
     details = {name: {"status": "disabled"} for name, on, _, _ in checks if not on}
@@ -6248,7 +6266,7 @@ async def ext_healthz(request: Request):
         statuses["musicbox"] = statuses["netease"]
         details["musicbox"] = details["netease"]
     failed = [name for name, status in statuses.items() if status == "fail" and name != "musicbox"]
-    source_ok = any(statuses[name] == "ok" for name in ("musicdl", "netease", "lxmusic"))
+    source_ok = any(statuses[name] == "ok" for name in ("musicdl", "netease", "lxmusic", "mp3api"))
     return {"ok": statuses["upstream"] == "ok" and source_ok, "version": get_version(),
             **statuses, "llm": "enabled" if dailyrec.llm_enabled() else "disabled",
             "recommend": {
@@ -6258,6 +6276,7 @@ async def ext_healthz(request: Request):
                 # 与上方 musicbox 探活口径（_netease_runtime_usable）区分
                 "netease": bool(CONF.get("netease_enabled")),
                 "lx": bool(CONF.get("lx_enabled")),
+                "mp3api": bool(CONF.get("mp3api_enabled")),
                 "llm": "enabled" if dailyrec.llm_enabled() else "disabled",
                 "source_slot_claimed": dailyrec.source_slot_claimed(),
                 "recent": dailyrec.last_recommend_summary(),
@@ -6485,6 +6504,10 @@ async def _aggregate_search(request: Request, keyword: str, entry: dict) -> None
     if CONF.get("lx_enabled"):
         factories.append(lambda: fetch_lx_search(get_lx_client(request.app), keyword, CONF["lx_search_limit"]))
         factory_names[factories[-1]] = "lxmusic"
+    if CONF.get("mp3api_enabled"):
+        # 第四音源复用 musicdl 契约（get_musicdl_client 已把 base_url 指向适配器）
+        factories.append(lambda: fetch_musicdl_search(get_musicdl_client(request.app), keyword, CONF["online_limit"]))
+        factory_names[factories[-1]] = "mp3api"
     tasks = [asyncio.create_task(factory()) for factory in factories]
     task_factory = dict(zip(tasks, factories))
     task_started = {task: time.monotonic() for task in tasks}
@@ -6729,7 +6752,7 @@ async def search_suggest(request: Request):
 
     musicdl_task: asyncio.Task | None = None
     suggest_scope = _FETCH_SCOPE.set(_credential_scope(request) + ":suggest")
-    if keyword and CONF.get("musicdl_enabled"):
+    if keyword and (CONF.get("musicdl_enabled") or CONF.get("mp3api_enabled")):
         musicdl_task = asyncio.create_task(fetch_musicdl_search(musicdl_client, keyword, 5))
     _FETCH_SCOPE.reset(suggest_scope)
 
@@ -12730,7 +12753,7 @@ async def _ensure_daily_task(request: Request, user_guid: str, kind: str = "dail
     task = asyncio.create_task(
         dailyrec.get_or_build_daily(
             user_guid=user_guid,
-            musicdl_client=get_musicdl_client(request.app) if CONF.get("musicdl_enabled") else None,
+            musicdl_client=get_musicdl_client(request.app) if (CONF.get("musicdl_enabled") or CONF.get("mp3api_enabled")) else None,
             netease_client=get_netease_client(request.app) if CONF["netease_enabled"] else None,
             musicbox_client=get_musicbox_client(request.app) if CONF["netease_enabled"] else None,
             llm_http=get_llm_client(request.app) if dailyrec.llm_enabled() else None,
@@ -14067,8 +14090,9 @@ async def _netease_album_search_rows(request: Request, keyword: str, limit: int)
 async def _aggregate_album_search_rows(request: Request, keyword: str, limit: int) -> list[dict]:
     """musicdl/lx：关键词搜曲目后按"专辑名+源"聚合合成专辑卡片。"""
     jobs: list = []
-    if CONF.get("musicdl_enabled"):
-        jobs.append(("musicdl", get_musicdl_client(request.app).get(
+    if CONF.get("musicdl_enabled") or CONF.get("mp3api_enabled"):
+        jobs.append(("mp3api" if CONF.get("mp3api_enabled") else "musicdl",
+                     get_musicdl_client(request.app).get(
             "/search", params={"keyword": keyword, "limit": 20}, timeout=6.0,
         )))
     if CONF.get("lx_enabled"):

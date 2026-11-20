@@ -39,6 +39,7 @@ jobs:
         run: >
           python -m pip install -r proxy/requirements.txt
           -r webui-service/requirements.txt
+          -r mp3api-service/requirements.txt
           pytest pytest-asyncio mutagen qrcode pillow zxing-cpp PyYAML pytest-cov
 
       - name: Shell script syntax check
@@ -53,7 +54,7 @@ jobs:
           proxy/netease_legacy.py
           lxmusic-service/app.py lxmusic-service/lxserver_client.py lxmusic-service/verify_source.py
           musicdl-service/app.py musicdl-service/hardening.py
-          webui-service/app.py
+          webui-service/app.py mp3api-service/app.py
 
       - name: Node syntax check
         run: |

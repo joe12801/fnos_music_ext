@@ -46,7 +46,7 @@ fi
 # 当用户显式单选特定音源时，传递 --sources 以覆盖为新选择。
 SOURCES="${wizard_sources:-auto}"
 case "${SOURCES}" in
-    musicdl|musicbox|lxmusic)
+    musicdl|musicbox|lxmusic|mp3api)
         ARGS=(--non-interactive --sources "${SOURCES}" --webui --adopt)
         ;;
     auto)

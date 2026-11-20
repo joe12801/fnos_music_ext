@@ -83,6 +83,10 @@ check_lx_http() {
 
 check musicdl FNMUSIC_MUSICDL_ENABLED
 check netease FNMUSIC_NETEASE_ENABLED
+# 第四音源自建 Music MP3 API：进程层与 musicdl/netease 同口径。上游可达性
+# 由适配器 /healthz 的 upstream_status / ok 字段自报（WebUI 健康页可见），
+# 不在容器健康检查里因外部上游故障把容器判为 unhealthy。
+check mp3api FNMUSIC_MP3API_ENABLED
 # 网易云歌单常驻（issue #38）：musicbox 非当前音源但常驻开启时应常驻运行。
 # 只捕捉崩溃循环（FATAL/BACKOFF）；webui 对账的主动停止（如未登录回收）属
 # 正常态，不算失败——避免 cookie 失效期间容器长期 unhealthy。

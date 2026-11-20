@@ -95,10 +95,11 @@ sudo appcenter-cli uninstall fnmusic-ext                # 卸载（自动备份�
 
 向导自动执行环境预检，依次引导：
 
-1. **音源三选一**（v2.0.0 起互斥单选）：
+1. **音源四选一**（v2.0.0 起互斥单选）：
    - `1` 网易云 musicbox：安装后自动进入扫码登录；
    - `2` musicdl：进入平台多选子菜单（默认精选酷我+咪咕；全部平台编号见 [../musicdl-service/PLATFORMS.md](../musicdl-service/PLATFORMS.md)）；
    - `3` 洛雪 lxmusic：直接安装（无源状态），源脚本装好在管理页 WebUI 配置；也可在安装命令附 `--lx-source-url`（URL / 本机 `.js` 路径），安装时进行「下载→初始化→搜索→解析→探活」全链路校验；
+   - `4` 自建 Music MP3 API（mp3api）：只安装适配器，装好在管理页「音乐源 → Music MP3 API」填写 `MP3API_BASE_URL` 与 `MP3API_API_KEY`；上游服务需自行部署，详见 [../mp3api-service/README.md](../mp3api-service/README.md)；
 2. **是否安装管理 WebUI**（仅本机 8774，默认否；打开时走飞牛管理员登录）；
 3. **大模型接口（可选）**：OpenAI 兼容 API；仅保存接口不会启用用途。安装后在管理页明确勾选「大模型用于猜你喜欢 / 每日推荐」，两个用途默认都关闭；
 4. **一键启用**：确认后自动调用 `./extend.sh` 接管验收。
@@ -119,13 +120,16 @@ sudo appcenter-cli uninstall fnmusic-ext                # 卸载（自动备份�
   --lx-source-url "$HOME/scripts/my-source.js" --extend   # 本机路径自动复制进数据卷
 ./install.sh --non-interactive --sources lxmusic --webui --extend  # 无源安装，装后在管理页配置
 
+# 自建 Music MP3 API（装后在管理页填上游地址与 API Key）
+./install.sh --non-interactive --sources mp3api --webui --extend
+
 # 保存大模型接口（密钥仅写入本地 .env，权限 600）；用途仍需在管理页明确启用
 ./install.sh --non-interactive --sources musicdl --enable-recommend \
   --llm-base-url 'https://api.openai.com/v1' \
   --llm-api-key '<KEY>' --llm-model 'gpt-4o-mini' --extend
 ```
 
-常用参数：`--sources`（音源三选一）、`--lx-source-url`（可选：http(s) URL 或
+常用参数：`--sources`（音源四选一）、`--lx-source-url`（可选：http(s) URL 或
 宿主机 `.js` 路径，路径会自动复制进数据卷）、`--lx-skip-verify`
 （跳过洛雪源可用性校验直接激活，源是否可用装好后在管理页 WebUI 查看）、
 `--webui` / `--no-webui`、`--extend`（安装后自动接管）、`--deploy docker|native`
@@ -420,8 +424,8 @@ v2.0.0 结构变化较大（三容器→单容器、数据目录迁移、配置�
 `git pull` → `./restore.sh`（先还原官方直连并清理旧部署，兼容 v1.x 旧容器/宿主机服务；
 `.env` 与数据保留）→ `./install.sh` 全新安装。直接原地升级同样支持。
 
-v1.x 允许多音源并存，v2.0.0 起三音源互斥单选。升级安装时检测到旧 `.env` 多源
-并存会要求重新三选一（非交互需 `--sources` 指定唯一音源）。此后换源在 WebUI
+v1.x 允许多音源并存，v2.0.0 起四音源互斥单选。升级安装时检测到旧 `.env` 多源
+并存会要求重新四选一（非交互需 `--sources` 指定唯一音源）。此后换源在 WebUI
 里秒级完成，不必重装。
 
 ### 洛雪源测试失败

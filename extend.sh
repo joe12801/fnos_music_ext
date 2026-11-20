@@ -147,13 +147,16 @@ FNMUSIC_VERSION="${FNMUSIC_VERSION:-0.0.0}"
 MUSICDL_URL="${FNMUSIC_MUSICDL_URL:-${MUSICDL_URL}}"
 MUSICBOX_URL="${FNMUSIC_MUSICBOX_URL:-${MUSICBOX_URL}}"
 LX_URL="${FNMUSIC_LX_URL:-${LX_URL}}"
+MP3API_URL="${FNMUSIC_MP3API_URL:-http://127.0.0.1:8776}"
 ENABLE_MUSICDL=0
 ENABLE_MUSICBOX=0
 ENABLE_LX=0
+ENABLE_MP3API=0
 ENABLE_WEBUI=0
 is_enabled "${FNMUSIC_MUSICDL_ENABLED:-true}" && ENABLE_MUSICDL=1
 is_enabled "${FNMUSIC_NETEASE_ENABLED:-true}" && ENABLE_MUSICBOX=1
 is_enabled "${FNMUSIC_LX_ENABLED:-false}" && ENABLE_LX=1
+is_enabled "${FNMUSIC_MP3API_ENABLED:-false}" && ENABLE_MP3API=1
 is_enabled "${FNMUSIC_WEBUI_ENABLED:-false}" && ENABLE_WEBUI=1
 # 部署形态（v2.8.0a+）：docker（默认，单容器）| native（宿主机 systemd + supervisord）
 DEPLOY_MODE="${FNMUSIC_DEPLOY_MODE:-docker}"
@@ -164,8 +167,9 @@ case "${DEPLOY_MODE}" in
         exit 1
         ;;
 esac
-if [ "${ENABLE_MUSICDL}" -eq 0 ] && [ "${ENABLE_MUSICBOX}" -eq 0 ] && [ "${ENABLE_LX}" -eq 0 ]; then
-    log_err "至少需要启用一个音源（FNMUSIC_MUSICDL_ENABLED / FNMUSIC_NETEASE_ENABLED / FNMUSIC_LX_ENABLED）。"
+if [ "${ENABLE_MUSICDL}" -eq 0 ] && [ "${ENABLE_MUSICBOX}" -eq 0 ] \
+   && [ "${ENABLE_LX}" -eq 0 ] && [ "${ENABLE_MP3API}" -eq 0 ]; then
+    log_err "至少需要启用一个音源（FNMUSIC_MUSICDL_ENABLED / FNMUSIC_NETEASE_ENABLED / FNMUSIC_LX_ENABLED / FNMUSIC_MP3API_ENABLED）。"
     exit 1
 fi
 
@@ -315,7 +319,17 @@ verify_acceptance() {
         local source="$1" keyword="$2" encoded
         encoded="$(python3 -c "import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1]))" "${keyword}" 2>/dev/null || true)"
         [ -z "${encoded}" ] && return 0
-        if [ "${source}" = "musicdl" ]; then
+        if [ "${source}" = "mp3api" ]; then
+            # 第四音源：musicdl 契约的 /search（适配器忽略 sources 白名单）
+            curl -s --max-time 20 "${MP3API_URL}/search?keyword=${encoded}&limit=3" 2>/dev/null | python3 -c "import sys,json
+try:
+    d=json.load(sys.stdin)
+    for it in (d.get('items') or [])[:3]:
+        i=it.get('id')
+        if i: print(i)
+except Exception:
+    pass" 2>/dev/null || true
+        elif [ "${source}" = "musicdl" ]; then
             # 按用户选择的 musicdl 平台白名单探测（FNMUSIC_ONLINE_SOURCES，空=服务默认白名单）
             local mdl_sources_q=""
             [ -n "${FNMUSIC_ONLINE_SOURCES:-}" ] && mdl_sources_q="&sources=${FNMUSIC_ONLINE_SOURCES}"
@@ -366,6 +380,7 @@ except Exception:
     [ "${ENABLE_MUSICDL}" -eq 1 ] && sources+=("musicdl")
     [ "${ENABLE_MUSICBOX}" -eq 1 ] && sources+=("musicbox")
     [ "${ENABLE_LX}" -eq 1 ] && sources+=("lxmusic")
+    [ "${ENABLE_MP3API}" -eq 1 ] && sources+=("mp3api")
 
     local src kw id
     for src in "${sources[@]}"; do
@@ -565,6 +580,9 @@ fi
 if [ "${ENABLE_LX}" -eq 1 ]; then
     wait_source "lxmusic" "${LX_URL}" || exit 1
 fi
+if [ "${ENABLE_MP3API}" -eq 1 ]; then
+    wait_source "mp3api" "${MP3API_URL}" 90 || exit 1
+fi
 if [ "${ENABLE_WEBUI}" -eq 1 ]; then
     wait_source "WebUI" "http://127.0.0.1:8774" || exit 1
 fi
@@ -705,7 +723,7 @@ log_info "3. 健康检查与运维："
 log_info "   • 探测状态: curl -s --unix-socket /var/run/trim_music.socket http://localhost/_ext/healthz"
 log_info "   • 查看日志: sudo journalctl -u fnmusic-ext -f"
 if [ "${ENABLE_WEBUI}" -eq 1 ]; then
-    log_info "   • 管理 WebUI: 飞牛桌面「fnMusic 扩展管理」（仅管理员；音源三选一/音质/推荐/LLM 运行期可调）"
+    log_info "   • 管理 WebUI: 飞牛桌面「fnMusic 扩展管理」（仅管理员；音源四选一/音质/推荐/LLM 运行期可调）"
 fi
 log_info "   • 一键还原: ./restore.sh (一键无损切回官方原生直连)"
 log_info "============================================================"

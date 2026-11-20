@@ -5,6 +5,34 @@
 
 ## [Unreleased]
 
+### 新增
+- 第四类主音源 `mp3api`：接入自建 Music MP3 API（yt-dlp 搜索/下载 + ffmpeg 转码 + 本地缓存）。
+  新增 `mp3api-service/` 适配器，把上游 API 包装成 musicdl 兼容 HTTP 契约
+  （`/healthz` `/sources` `/search` `/info` `/stream`），条目标记为
+  `mp3api:<video_id>`，从而复用代理原有的取链、Range/206、边听边存、封面与转码链路。
+  详见 [接入说明](docs/MP3API_INTEGRATION.md) 与 [适配器文档](mp3api-service/README.md)。
+- `install.sh --sources mp3api`、交互向导第 4 项、FPK 安装向导与安装回调白名单
+  同步支持第四音源；Docker Compose（8776→8006）、supervisord 容器/native 进程表、
+  `entrypoint.sh`、`healthcheck.sh`、`.dockerignore`、`Dockerfile`、
+  `ensure_sources_native.sh`、CI 与测试编排全部纳管。
+- 管理页「音乐源」由三选一改为四选一，新增 Music MP3 API 配置面板
+  （上游地址、API Key、码率、最长时长）。
+
+### 安全
+- `MP3API_API_KEY` 仅由 mp3api 进程从 `FNMUSIC_ENV_FILE` 只读加载，显式环境变量优先；
+  不写入搜索结果、302 `Location`、日志，也不放进 supervisor 公共 `environment`
+  以免扩散到同容器其他进程。
+- 适配器刻意不实现 `/internal/*`，不向上游地址做客户端直连；使用本音源时
+  `FNMUSIC_MUSICDL_DIRECT_PLAY` 必须保持关闭。
+- `MP3API_API_KEY` 未加入 `ENV_EXPLICIT`，安装/升级合并 `.env` 时不会清空用户已保存的密钥。
+- `MP3API_MAX_DURATION`（默认 900 秒）在搜索阶段过滤超长资源；video_id 白名单校验防止非法上游请求。
+
+### 兼容性
+- 第四音源默认关闭（`FNMUSIC_MP3API_ENABLED=false`），与其余三音源互斥单选；
+  未启用时 `get_musicdl_client()` 仍指向原 musicdl，原三音源行为零变化。
+- 代理运行期切源会按 `base_url` 变化重建 HTTP client，秒级生效；上游不可达时
+  `/healthz` 如实反映 `upstream_status`，不伪装健康。
+
 ## [3.1.2] - 2026-11-19
 
 本版本为正式版本。

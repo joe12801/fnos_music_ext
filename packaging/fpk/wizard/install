@@ -9,7 +9,7 @@
             {
                 "type": "radio",
                 "field": "wizard_sources",
-                "label": "初始音源（三选一）",
+                "label": "初始音源（四选一）",
                 "initValue": "auto",
                 "options": [
                     {
@@ -27,6 +27,10 @@
                     {
                         "label": "lxmusic — 洛雪自定义源（安装后在管理页配置源脚本：粘贴 URL / 上传 .js / NAS 选择）",
                         "value": "lxmusic"
+                    },
+                    {
+                        "label": "mp3api — 自建 Music MP3 API（需自备上游服务；安装后在管理页填上游地址与 API Key）",
+                        "value": "mp3api"
                     }
                 ],
                 "rules": [
@@ -38,7 +42,7 @@
             },
             {
                 "type": "tips",
-                "helpText": "选择洛雪自定义源时无需在此提供脚本：安装完成后用飞牛管理员打开桌面「fnMusic 扩展管理」，在「音乐源 → 洛雪自定义源」里粘贴脚本 URL、上传电脑上的 .js 文件或从 NAS 选择，测试可用后保存即激活。"
+                "helpText": "选择洛雪自定义源时无需在此提供脚本：安装完成后用飞牛管理员打开桌面「fnMusic 扩展管理」，在「音乐源 → 洛雪自定义源」里粘贴脚本 URL、上传电脑上的 .js 文件或从 NAS 选择，测试可用后保存即激活。选择 Music MP3 API 时同样无需在此填密钥：安装完成后在「音乐源 → Music MP3 API」填写上游地址与 API Key；上游服务需自行部署，本应用只提供适配器。"
             },
             {
                 "type": "switch",
