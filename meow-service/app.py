@@ -165,6 +165,38 @@ def _error(keyword: str, message: str) -> dict:
             "errors": {SOURCE: message}, "engine": SOURCE}
 
 
+def _fallback_raw_items(keyword: str, limit: int) -> list[dict]:
+    """上游 /api/search 为空时的兜底候选。
+
+    MeowMusicServer 的真实能力是「歌名(+歌手) → 最佳单曲」的点歌核心
+    (/stream_live?song=&singer=，10+ 音源聚合、定长 audio/mpeg)，而它的
+    /api/search 是个弱接口：只读工作目录下的 sources.json + 调用 yuafeng
+    旧 API，实测（192.168.2.220）恒返回空数组。因此当上游给不出曲目列表时，
+    把用户输入的关键词解析成 1~2 个可点播候选，点击后由 /stream 真实出音频：
+      * "晴天"          -> (song="晴天", singer="")
+      * "晴天 周杰伦"   -> (song="晴天", singer="周杰伦") + (song="晴天 周杰伦", singer="")
+    这样既保留「总源即点即播」的语义，又完全不需要改动上游 Go 服务。
+    """
+    kw = (keyword or "").strip()
+    if not kw:
+        return []
+    parts = [p for p in re.split(r"\s+", kw) if p]
+    combos: list[tuple[str, str]] = []
+    if len(parts) >= 2:
+        combos.append((parts[0], " ".join(parts[1:])))  # 歌名在前：晴天 周杰伦
+    combos.append((kw, ""))                            # 整串当歌名，最稳（已实测可播）
+    seen: set[tuple[str, str]] = set()
+    out: list[dict] = []
+    for song, singer in combos:
+        if (song, singer) in seen:
+            continue
+        seen.add((song, singer))
+        out.append({"title": song, "artist": singer, "duration": 0, "cover_url": ""})
+        if len(out) >= limit:
+            break
+    return out
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.upstream = httpx.AsyncClient(
@@ -239,6 +271,10 @@ async def search(
 
     # Meow /api/search 返回数组：[{title, artist, url, cover_url, lyric_url, duration}]
     raw_items = payload if isinstance(payload, list) else (payload.get("results") or payload.get("items") or [])
+    if not raw_items:
+        # 上游 /api/search 是弱接口：无 sources.json 时恒返回空数组（真机实测）。
+        # 兜底成可点播候选，点击后 /stream 走 /stream_live 真实出音频。
+        raw_items = _fallback_raw_items(keyword, limit)
     items: list[dict] = []
     for raw in raw_items:
         if not isinstance(raw, dict):

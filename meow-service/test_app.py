@@ -166,3 +166,71 @@ def test_search_upstream_failure_soft(client):
     c, _, _ = client
     # 通过修改上游 handler 触发失败需重建，这里仅验证空 keyword 被拒
     assert c.get("/search", params={"keyword": ""}).status_code == 422
+
+
+# ---- 真机兜底：上游 /api/search 恒返回 [] 时的行为（192.168.2.220 实测）----
+@pytest.fixture()
+def empty_search_client(monkeypatch):
+    """上游 /api/search 返回空数组，/stream_live 仍按 song(+可选 singer) 出流。"""
+    seen: list[httpx.Request] = []
+    for k, v in {"MEOW_BASE_URL": "http://upstream.test", "MEOW_API_KEY": "",
+                 "MEOW_TIMEOUT": "30", "MEOW_MAX_DURATION": "0",
+                 "MEOW_TRUST_ENV": "0", "MEOW_NO_DOTENV": "1"}.items():
+        monkeypatch.setenv(k, v)
+    spec = importlib.util.spec_from_file_location("meow_app_empty_test", APP_PATH)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["meow_app_empty_test"] = mod
+    spec.loader.exec_module(mod)
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.url.path == "/api/search":
+            return httpx.Response(200, json=[])          # 真机现象：恒空
+        if request.url.path == "/stream_live":
+            return httpx.Response(200, content=FAKE_MP3, headers={
+                "content-type": "audio/mpeg", "content-length": str(len(FAKE_MP3)),
+                "accept-ranges": "bytes",
+            })
+        return httpx.Response(200, text="ok")
+
+    real_async_client = httpx.AsyncClient
+
+    def factory(*args, **kwargs):
+        kwargs.pop("transport", None)
+        return real_async_client(transport=httpx.MockTransport(handle), *args, **kwargs)
+
+    monkeypatch.setattr(mod.httpx, "AsyncClient", factory)
+    with TestClient(mod.app) as c:
+        yield c, seen, mod
+
+
+def test_fallback_single_keyword(empty_search_client):
+    """搜「晴天」应兜底出 1 个可点播候选，且 id 可逆还原。"""
+    c, _, mod = empty_search_client
+    j = c.get("/search", params={"keyword": "晴天"}).json()
+    assert j["ok"] is True and len(j["items"]) == 1
+    item = j["items"][0]
+    assert item["title"] == "晴天" and item["id"].startswith("meow:")
+    song, singer = mod._decode_id(item["id"])
+    assert song == "晴天" and singer == ""
+
+
+def test_fallback_song_singer_split(empty_search_client):
+    """搜「晴天 周杰伦」应拆出 (晴天, 周杰伦) 主候选 + 整串兜底候选。"""
+    c, _, mod = empty_search_client
+    j = c.get("/search", params={"keyword": "晴天 周杰伦"}).json()
+    assert len(j["items"]) == 2
+    song, singer = mod._decode_id(j["items"][0]["id"])
+    assert (song, singer) == ("晴天", "周杰伦")
+    song2, singer2 = mod._decode_id(j["items"][1]["id"])
+    assert (song2, singer2) == ("晴天 周杰伦", "")
+
+
+def test_fallback_candidate_is_playable(empty_search_client):
+    """兜底候选点播必须真出 MP3（singer 为空也要能出流）。"""
+    c, seen, _ = empty_search_client
+    sid = c.get("/search", params={"keyword": "晴天"}).json()["items"][0]["id"]
+    r = c.get("/stream", params={"id": sid, "proxy": "true"})
+    assert r.status_code == 200 and r.content == FAKE_MP3
+    req = next(x for x in seen if x.url.path == "/stream_live")
+    assert req.url.params.get("song") == "晴天"
