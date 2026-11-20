@@ -104,7 +104,7 @@ killasgroup=true
 stdout_logfile=@RUN@/webui.log
 stdout_logfile_maxbytes=0
 redirect_stderr=true
-environment=WEBUI_REPO_DIR="@REPO@",WEBUI_MUSICDL_URL="http://127.0.0.1:8768",WEBUI_MUSICBOX_URL="http://127.0.0.1:8770",WEBUI_LX_URL="http://127.0.0.1:8772",WEBUI_MP3API_URL="http://127.0.0.1:8776",WEBUI_SUPERVISORCTL="supervisorctl -c @RUN@/supervisord.conf"
+environment=WEBUI_REPO_DIR="@REPO@",WEBUI_MUSICDL_URL="http://127.0.0.1:8768",WEBUI_MUSICBOX_URL="http://127.0.0.1:8770",WEBUI_LX_URL="http://127.0.0.1:8772",WEBUI_MP3API_URL="http://127.0.0.1:8776",WEBUI_MEOW_URL="http://127.0.0.1:8778",WEBUI_SUPERVISORCTL="supervisorctl -c @RUN@/supervisord.conf"
 
 ; 第四音源：监听宿主 8776（容器形态为 8006）。MP3API_* 由适配器按公共
 ; environment 里的 FNMUSIC_ENV_FILE 自行只读 .env，无需在此展开密钥。
