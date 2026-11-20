@@ -13,7 +13,9 @@ v3.1.2 基础上，加入**第四类主音源 `mp3api`**，把自建 Music MP3 A
   - **预构建镜像包** `fnmusic-ext-3.1.2-0-prebuilt-arm64.fpk`（约 490 MB）：
     内置 `linux/arm64` Docker 镜像归档与宿主 wheelhouse，安装时离线导入，
     不再现场 apt/pip 构建。适合飞牛 ARM 机型、离线或网络慢的环境。
-  - 如需 x86 机型，可用同一流水线产出 `...-prebuilt-amd64.fpk`。
+  - **预构建镜像包** `fnmusic-ext-3.1.2-0-prebuilt-amd64.fpk`（约 490 MB）：
+    内置 `linux/amd64` Docker 镜像归档与宿主 wheelhouse，适合 x86_64 机型离线或
+    网络慢的环境。
 
 ---
 
@@ -24,7 +26,9 @@ v3.1.2 基础上，加入**第四类主音源 `mp3api`**，把自建 Music MP3 A
 | `fnmusic-ext-3.1.2-0.fpk` | 通用安装包（`platform=all`，首次安装在 NAS 上现场构建镜像，约 41 MB） |
 | `fnmusic-ext-3.1.2-0.fpk.sha256` | 通用包校验文件 |
 | `fnmusic-ext-3.1.2-0-prebuilt-arm64.fpk` | ARM64 预构建镜像包（内置 Docker 镜像 + wheelhouse，约 490 MB） |
-| `fnmusic-ext-3.1.2-0-prebuilt-arm64.fpk.sha256` | 预构建包校验文件 |
+| `fnmusic-ext-3.1.2-0-prebuilt-arm64.fpk.sha256` | ARM64 预构建包校验文件 |
+| `fnmusic-ext-3.1.2-0-prebuilt-amd64.fpk` | x86_64 预构建镜像包（内置 Docker 镜像 + wheelhouse，约 490 MB） |
+| `fnmusic-ext-3.1.2-0-prebuilt-amd64.fpk.sha256` | x86_64 预构建包校验文件 |
 | `RELEASE_MP3API.md` | 本说明 |
 | `MP3API_INTEGRATION.md` | 完整技术说明：架构、契约、安全、部署、验证、合规 |
 
@@ -33,11 +37,13 @@ v3.1.2 基础上，加入**第四类主音源 `mp3api`**，把自建 Music MP3 A
 ```bash
 sha256sum -c fnmusic-ext-3.1.2-0.fpk.sha256
 sha256sum -c fnmusic-ext-3.1.2-0-prebuilt-arm64.fpk.sha256
+sha256sum -c fnmusic-ext-3.1.2-0-prebuilt-amd64.fpk.sha256
 ```
 
-**选哪个包**：ARM 机型（飞牛常见形态）优先用 `-prebuilt-arm64` 大包，安装更快、
-不依赖现场访问 apt / PyPI；x86 机型用通用包即可，或另外构建 `-prebuilt-amd64`。
-两者应用版本相同，安装后的配置与音源启用步骤完全一致。
+**选哪个包**：ARM64 机型选 `-prebuilt-arm64`，x86_64 机型选 `-prebuilt-amd64`；
+两者都内置镜像与依赖，安装更快、不依赖现场访问 apt / PyPI。通用包适合不在意
+首次构建耗时、希望一个文件跨架构使用的场景。三者应用版本相同，安装后的配置
+与音源启用步骤完全一致。
 
 ---
 
@@ -140,8 +146,9 @@ musicdl 分支，因此搜索聚合、取链、Range/206、边听边存、封面
   `206 + Content-Range`，MP3 字节流正常。
 - CI 构建 FPK 时额外校验包内必须存在 `repo/mp3api-service/app.py`，
   确保第四音源确实随包交付。
-- 预构建包额外校验 `repo/assets/image/manifest.json` 的架构为 `linux/arm64`、
-  wheelhouse 满足 `proxy/requirements.txt`，并核对 FPK 与 `.sha256` 一致。
+- 预构建包额外校验 `repo/assets/image/manifest.json` 的架构与目标一致
+  （`linux/arm64` 或 `linux/amd64`）、wheelhouse 满足 `proxy/requirements.txt`，
+  并核对 FPK 与 `.sha256` 一致。
 
 已知环境限制（与本次改动无关）：Windows git-bash 下个别中文编码 / 并发时序测试
 不稳定，完整 `python scripts/run_tests.py` 建议在 Linux / CI 复跑。
