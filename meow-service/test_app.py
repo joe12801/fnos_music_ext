@@ -55,6 +55,8 @@ def client(monkeypatch):
     monkeypatch.setenv("MEOW_MAX_DURATION", "0")
     monkeypatch.setenv("MEOW_TRUST_ENV", "0")
     monkeypatch.setenv("MEOW_NO_DOTENV", "1")
+    monkeypatch.setenv("MEOW_METADATA_ENABLED", "0")
+    monkeypatch.setenv("MEOW_METADATA_CACHE_DIR", str(Path(__file__).parent / ".meta_cache_test"))
     spec = importlib.util.spec_from_file_location("meow_app_test", APP_PATH)
     mod = importlib.util.module_from_spec(spec)
     sys.modules["meow_app_test"] = mod
@@ -175,7 +177,9 @@ def empty_search_client(monkeypatch):
     seen: list[httpx.Request] = []
     for k, v in {"MEOW_BASE_URL": "http://upstream.test", "MEOW_API_KEY": "",
                  "MEOW_TIMEOUT": "30", "MEOW_MAX_DURATION": "0",
-                 "MEOW_TRUST_ENV": "0", "MEOW_NO_DOTENV": "1"}.items():
+                 "MEOW_TRUST_ENV": "0", "MEOW_NO_DOTENV": "1",
+                 "MEOW_METADATA_ENABLED": "0",
+                 "MEOW_METADATA_CACHE_DIR": str(Path(__file__).parent / ".meta_cache_test")}.items():
         monkeypatch.setenv(k, v)
     spec = importlib.util.spec_from_file_location("meow_app_empty_test", APP_PATH)
     mod = importlib.util.module_from_spec(spec)
@@ -234,3 +238,170 @@ def test_fallback_candidate_is_playable(empty_search_client):
     assert r.status_code == 200 and r.content == FAKE_MP3
     req = next(x for x in seen if x.url.path == "/stream_live")
     assert req.url.params.get("song") == "晴天"
+
+
+# ---- 元数据补全：歌词 / 海报 / 专辑 / 时长（网易云公开接口）----
+LRC_TEXT = "[00:00.000] 作词 : 周杰伦\n[00:28.950]故事的小黄花\n[00:32.380]从出生那年就飘着\n"
+NETEASE_SONGS = [
+    {"id": 2668397359, "name": "晴天 (原唱 周杰伦)",
+     "artists": [{"name": "RyaVocal"}],
+     "album": {"name": "晴天", "picId": 109951170413587092}},
+    {"id": 186016, "name": "晴天",
+     "artists": [{"name": "周杰伦"}],
+     "album": {"name": "叶惠美", "picId": 109951170413587092}},
+    {"id": 999, "name": "晴天 (女声版)", "artists": [{"name": "GYBeat"}]},
+]
+NETEASE_DETAIL = {"songs": [{"name": "晴天", "duration": 269000,
+                             "album": {"name": "叶惠美",
+                                       "picUrl": "https://p2.music.126.net/cover.jpg"}}]}
+NETEASE_LYRIC = {"lrc": {"lyric": LRC_TEXT}}
+
+
+@pytest.fixture()
+def meta_client(monkeypatch, tmp_path):
+    """上游 /api/search 恒空 + 网易云元数据接口可用。"""
+    seen: list[httpx.Request] = []
+    for k, v in {"MEOW_BASE_URL": "http://upstream.test", "MEOW_API_KEY": "",
+                 "MEOW_TIMEOUT": "30", "MEOW_MAX_DURATION": "0",
+                 "MEOW_TRUST_ENV": "0", "MEOW_NO_DOTENV": "1",
+                 "MEOW_METADATA_ENABLED": "1", "MEOW_METADATA_NETEASE": "1",
+                 "MEOW_METADATA_PCM": "0", "MEOW_METADATA_TIMEOUT": "3",
+                 "MEOW_METADATA_HOP_TIMEOUT": "1",
+                 "MEOW_METADATA_BASE": "https://music.163.com",
+                 "MEOW_METADATA_CACHE_DIR": str(tmp_path / "meta")}.items():
+        monkeypatch.setenv(k, v)
+    spec = importlib.util.spec_from_file_location("meow_app_meta_test", APP_PATH)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["meow_app_meta_test"] = mod
+    spec.loader.exec_module(mod)
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        path = request.url.path
+        if path == "/api/search":                 # 上游恒空 -> 走兜底
+            return httpx.Response(200, json=[])
+        if path == "/stream_live":
+            return httpx.Response(200, content=FAKE_MP3, headers={
+                "content-type": "audio/mpeg", "content-length": str(len(FAKE_MP3))})
+        if path == "/api/search/get":             # 网易云搜索
+            return httpx.Response(200, json={"result": {"songs": NETEASE_SONGS}})
+        if path == "/api/song/detail":
+            return httpx.Response(200, json=NETEASE_DETAIL)
+        if path == "/api/song/lyric":
+            return httpx.Response(200, json=NETEASE_LYRIC)
+        return httpx.Response(200, text="ok")
+
+    real_async_client = httpx.AsyncClient
+
+    def factory(*args, **kwargs):
+        kwargs.pop("transport", None)
+        return real_async_client(transport=httpx.MockTransport(handle), *args, **kwargs)
+
+    monkeypatch.setattr(mod.httpx, "AsyncClient", factory)
+    with TestClient(mod.app) as c:
+        yield c, seen, mod
+
+
+def test_info_has_cover_and_lyric(meta_client):
+    """/info 必须给出封面直链与 LRC 歌词（飞牛歌词/海报出口读这两个字段）。"""
+    c, _, _ = meta_client
+    sid = c.get("/search", params={"keyword": "晴天"}).json()["items"][0]["id"]
+    info = c.get("/info", params={"id": sid}).json()
+    assert info["ok"] is True
+    assert "p2.music.126.net/cover.jpg" in info["cover_url"]
+    assert "param=500y500" in info["cover_url"]
+    assert "故事的小黄花" in info["lyric"]
+    assert info["lyric"].startswith("[00:")
+    assert info["album"] == "叶惠美" and info["duration_s"] == 269
+    assert info["title"] == "晴天"
+
+
+def test_search_item_gets_cover_after_warm(meta_client):
+    """预热完成后搜索结果直接带封面/专辑/时长，且不暴露上游地址。"""
+    c, _, _ = meta_client
+    c.get("/search", params={"keyword": "晴天"})
+    # 等后台预热任务完成
+    import time
+    for _ in range(50):
+        j = c.get("/search", params={"keyword": "晴天"}).json()
+        if j["items"][0]["cover_url"]:
+            break
+        time.sleep(0.05)
+    item = j["items"][0]
+    assert "p2.music.126.net" in item["cover_url"]
+    assert item["album"] == "叶惠美" and item["duration_s"] == 269
+    assert "download_url" not in item and "url" not in item
+
+
+def test_metadata_cache_avoids_repeat(meta_client):
+    """同一 (song,singer) 命中缓存后不再重复打网易云。"""
+    c, seen, _ = meta_client
+    sid = c.get("/search", params={"keyword": "晴天"}).json()["items"][0]["id"]
+    c.get("/info", params={"id": sid})
+    count = sum(1 for x in seen if x.url.path == "/api/song/lyric")
+    c.get("/info", params={"id": sid})
+    c.get("/info", params={"id": sid})
+    assert sum(1 for x in seen if x.url.path == "/api/song/lyric") == count
+
+
+def test_metadata_picks_clean_title(meta_client):
+    """打分应优先选标题干净的『晴天』而非『晴天 (原唱 …)』。"""
+    c, seen, mod = meta_client
+    c.get("/info", params={"id": mod._encode_id("晴天", "")})
+    detail_reqs = [x for x in seen if x.url.path == "/api/song/detail"]
+    assert detail_reqs and "186016" in detail_reqs[0].url.params.get("ids", "")
+
+
+# ---- 元数据失败/关闭时：播放链路不受影响 ----
+@pytest.fixture()
+def meta_down_client(monkeypatch, tmp_path):
+    """网易云全部 5xx；元数据必须静默降级，播放照常。"""
+    for k, v in {"MEOW_BASE_URL": "http://upstream.test", "MEOW_API_KEY": "",
+                 "MEOW_TIMEOUT": "30", "MEOW_MAX_DURATION": "0",
+                 "MEOW_TRUST_ENV": "0", "MEOW_NO_DOTENV": "1",
+                 "MEOW_METADATA_ENABLED": "1", "MEOW_METADATA_PCM": "0",
+                 "MEOW_METADATA_TIMEOUT": "2", "MEOW_METADATA_HOP_TIMEOUT": "0.5",
+                 "MEOW_METADATA_BASE": "https://music.163.com",
+                 "MEOW_METADATA_CACHE_DIR": str(tmp_path / "meta_down")}.items():
+        monkeypatch.setenv(k, v)
+    spec = importlib.util.spec_from_file_location("meow_app_meta_down_test", APP_PATH)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["meow_app_meta_down_test"] = mod
+    spec.loader.exec_module(mod)
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/search":
+            return httpx.Response(200, json=[])
+        if request.url.path == "/stream_live":
+            return httpx.Response(200, content=FAKE_MP3, headers={
+                "content-type": "audio/mpeg", "content-length": str(len(FAKE_MP3))})
+        if request.url.path.startswith("/api/song") or request.url.path == "/api/search/get":
+            return httpx.Response(503, text="unavailable")
+        return httpx.Response(200, text="ok")
+
+    real_async_client = httpx.AsyncClient
+
+    def factory(*args, **kwargs):
+        kwargs.pop("transport", None)
+        return real_async_client(transport=httpx.MockTransport(handle), *args, **kwargs)
+
+    monkeypatch.setattr(mod.httpx, "AsyncClient", factory)
+    with TestClient(mod.app) as c:
+        yield c, mod
+
+
+def test_metadata_failure_is_soft(meta_down_client):
+    c, mod = meta_down_client
+    sid = c.get("/search", params={"keyword": "晴天"}).json()["items"][0]["id"]
+    info = c.get("/info", params={"id": sid}).json()
+    assert info["ok"] is True and info["cover_url"] == "" and info["lyric"] == ""
+    r = c.get("/stream", params={"id": sid, "proxy": "true"})
+    assert r.status_code == 200 and r.content == FAKE_MP3
+
+
+def test_metadata_disabled_contract(client):
+    """MEOW_METADATA_ENABLED=0 时行为与旧版完全一致。"""
+    c, _, _ = client
+    sid = c.get("/search", params={"keyword": "晴天"}).json()["items"][0]["id"]
+    info = c.get("/info", params={"id": sid}).json()
+    assert info["lyric"] == "" and info["duration_s"] == 269

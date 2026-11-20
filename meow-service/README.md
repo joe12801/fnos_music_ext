@@ -45,12 +45,39 @@ MeowMusicServer  (/api/search  /stream_live)
 |---|---|
 | `GET /healthz` | 健康检查，探测上游根路径 |
 | `GET /sources` | `{"enabled":["meow"],"registered":["meow"]}` |
-| `GET /search?keyword=&limit=[&sources=]` | 调上游 `/api/search`，返回 `{"ok":true,"items":[...],"errors":{},"engine":"meow"}` |
-| `GET /info?id=meow:<b64>` | 从可逆 id / 搜索缓存返回曲目元数据 |
+| `GET /search?keyword=&limit=[&sources=]` | 调上游 `/api/search`；恒空时兜底成可点播候选；命中元数据缓存时直接带封面/专辑/时长 |
+| `GET /info?id=meow:<b64>` | 从可逆 id / 搜索缓存 + 元数据补全返回曲目元数据（含 `cover_url`、`lyric`） |
 | `GET /stream?id=meow:<b64>&proxy=true` | 调上游 `/stream_live`，支持 `Range` / 206，透传定长字节流 |
 
 条目 id 一律为 `meow:<base64url(song\x1fsinger)>`，可逆、无状态，适配器重启也不失效。
 代理据此生成 `online:meow:<b64>`，既不是 `netease` 也不是 `lx`，因此自动落入 musicdl 分支。
+
+## 歌词与海报（元数据补全）
+
+上游 MeowMusicServer 的 `/api/search` 恒返回空数组，缓存目录里也只有 `music.mp3`
+（没有 `cover.jpg` / `lyric.lrc`），而飞牛代理的封面出口和歌词出口分别读取音源
+`/info` 的 `cover_url` 与 `lyric`。若不补全，meow 源的歌曲能播但**没有歌词、海报、
+专辑和时长**。
+
+本服务因此内置一层轻量补全（默认开启，可关闭）：
+
+```
+/search  ── 后台预热 ─┐
+                      ├─→ 网易云公开接口 /api/search/get
+/info   ── 同步取 ───┘      ├─ /api/song/detail  → album.picUrl（封面直链）
+                            └─ /api/song/lyric   → lrc.lyric（标准 LRC 文本）
+                      ↑ 可选：上游 /stream_pcm 校正真实歌手 / 时长（默认关闭）
+                      ↓
+        内存 + 磁盘缓存（默认 7 天）→ /info 的 cover_url / lyric / album / duration_s
+```
+
+- **失败静默降级**：网易云不可达、超时、无匹配都只返回空元数据，播放链路完全不受影响。
+- **不阻塞搜索**：`/search` 只做后台预热；`/info` 用独立短超时（默认 2.8s，代理对 `/info` 有 4s 硬超时）。
+- **不重复打外网**：同 key 的并发补全合并为一个任务，结果落内存 + 磁盘缓存。
+- **封面由代理同源直出**：返回的是 CDN 直链，代理 `_online_cover_delivery` 会自动代理成同源图片，客户端不直连外网。
+- `/healthz` 增加 `meta_enabled` / `meta_base` / `meta_cache_entries` 便于诊断。
+
+详细说明见下方配置表与 `.env.example`。
 
 ## 配置（环境变量）
 
@@ -72,6 +99,14 @@ MeowMusicServer  (/api/search  /stream_live)
 | `MEOW_TRUST_ENV` | `0` | 是否让 httpx 读取 `HTTP_PROXY` 等环境代理 |
 | `FNMUSIC_MEOW_ENABLED` | `false` | **代理侧**开关 |
 | `FNMUSIC_MEOW_URL` | `http://127.0.0.1:8778` | 代理访问本服务的地址 |
+| `MEOW_METADATA_ENABLED` | `true` | 歌词/海报补全总开关，设 `0` 完全关闭 |
+| `MEOW_METADATA_BASE` | `https://music.163.com` | 元数据接口地址 |
+| `MEOW_METADATA_NETEASE` | `true` | 是否用网易云取封面 + LRC |
+| `MEOW_METADATA_PCM` | `false` | 是否额外请求上游 `/stream_pcm` 校正歌手/时长（会给 Go 服务加压） |
+| `MEOW_METADATA_TIMEOUT` | `2.8` | 单次补全总预算（秒） |
+| `MEOW_METADATA_HOP_TIMEOUT` | `1.2` | 每一跳超时（秒） |
+| `MEOW_METADATA_TTL` | `604800` | 缓存有效期（秒） |
+| `MEOW_METADATA_CACHE_DIR` | 服务目录 `.meta_cache` | 元数据磁盘缓存目录 |
 
 ## 启用（源码部署）
 
