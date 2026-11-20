@@ -45,7 +45,7 @@ docker compose -f docker-compose.prebuilt.yml pull
 docker compose -f docker-compose.prebuilt.yml up -d
 
 # 或改用阿里云 ACR 国内镜像（国内网络更稳）
-FNMUSIC_IMAGE=crpi-wv2uaegt8g2y0g3c.cn-guangzhou.personal.cr.aliyuncs.com/fnmusic-ext/fnmusic-sources:3.1.2-meow \
+FNMUSIC_IMAGE=crpi-wv2uaegt8g2y0g3c.cn-guangzhou.personal.cr.aliyuncs.com/joeloveqt-project/joeloveqt:3.1.2-meow \
   docker compose -f docker-compose.prebuilt.yml up -d
 ```
 
@@ -204,12 +204,12 @@ docker tag fnmusic-sources:3.1.2-meow joe1280/fnmusic-sources:latest
 docker push joe1280/fnmusic-sources:3.1.2-meow
 docker push joe1280/fnmusic-sources:latest
 
-# 阿里云 ACR 个人版（国内直连，需先在控制台创建命名空间 fnmusic-ext）
+# 阿里云 ACR 个人版（国内直连；命名空间 joeloveqt-project / 仓库 joeloveqt 已创建）
 docker login --username=aliyun1109508239 \
   crpi-wv2uaegt8g2y0g3c.cn-guangzhou.personal.cr.aliyuncs.com
 docker tag fnmusic-sources:3.1.2-meow \
-  crpi-wv2uaegt8g2y0g3c.cn-guangzhou.personal.cr.aliyuncs.com/fnmusic-ext/fnmusic-sources:3.1.2-meow
-docker push crpi-wv2uaegt8g2y0g3c.cn-guangzhou.personal.cr.aliyuncs.com/fnmusic-ext/fnmusic-sources:3.1.2-meow
+  crpi-wv2uaegt8g2y0g3c.cn-guangzhou.personal.cr.aliyuncs.com/joeloveqt-project/joeloveqt:3.1.2-meow
+docker push crpi-wv2uaegt8g2y0g3c.cn-guangzhou.personal.cr.aliyuncs.com/joeloveqt-project/joeloveqt:3.1.2-meow
 ```
 
 > 若 NAS 有 IPv6 但 Docker Hub 的 AAAA 记录不可达，`docker login/push` 会走 IPv6
