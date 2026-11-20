@@ -118,7 +118,7 @@ wait_ready() {
     return 1
 }
 
-# 四选一音源：只启动 .env 选中的那个（多开视为异常，全部忽略只取第一个命中）
+# 五选一音源：只启动 .env 选中的那个（多开视为异常，全部忽略只取第一个命中）
 if [ "$(env_flag FNMUSIC_MUSICDL_ENABLED)" = "true" ]; then
     start_prog musicdl
 elif [ "$(env_flag FNMUSIC_NETEASE_ENABLED)" = "true" ]; then
@@ -132,8 +132,11 @@ elif [ "$(env_flag FNMUSIC_MP3API_ENABLED)" = "true" ]; then
     # 第四音源：mp3api-service 自行只读 /repo/.env 取上游地址与 API Key，
     # 这里只需拉起进程，不向 supervisor 环境注入任何密钥。
     start_prog mp3api
+elif [ "$(env_flag FNMUSIC_MEOW_ENABLED)" = "true" ]; then
+    # 第五音源：meow-service 自行只读 /repo/.env 取 MEOW_*；只需拉起进程。
+    start_prog meow
 else
-    log "未配置任何音源（FNMUSIC_MUSICDL_ENABLED/FNMUSIC_NETEASE_ENABLED/FNMUSIC_LX_ENABLED/FNMUSIC_MP3API_ENABLED 均未启用）"
+    log "未配置任何音源（MUSICDL/NETEASE/LX/MP3API/MEOW 均未启用）"
 fi
 
 # 网易云歌单常驻（issue #38）：当前音源不是 musicbox 但勾选常驻，且有网易

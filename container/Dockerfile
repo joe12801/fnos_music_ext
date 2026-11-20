@@ -1,4 +1,4 @@
-# fnmusic-sources 统一镜像：musicdl + musicbox + lxmusic + webui + mp3api 五进程（supervisor 管理，按需启动）
+# fnmusic-sources 统一镜像：musicdl + musicbox + lxmusic + webui + mp3api + meow 六进程（supervisor 管理，按需启动）
 # 基础镜像引用可由 build args 覆盖（默认官方源；国内网络自动回退见根目录 ensure_base_image.sh）
 ARG BASE_IMAGE=python:3.13-slim
 FROM ${BASE_IMAGE} AS runtime-base
@@ -104,6 +104,7 @@ COPY musicdl-service/requirements.txt /srv/req.musicdl
 COPY lxmusic-service/requirements.txt /srv/req.lxmusic
 COPY webui-service/requirements.txt /srv/req.webui
 COPY mp3api-service/requirements.txt /srv/req.mp3api
+COPY meow-service/requirements.txt /srv/req.meow
 RUN set -eu; \
     fix_dns() { \
         { \
@@ -113,10 +114,10 @@ RUN set -eu; \
         cat /tmp/resolv.fnmusic > /etc/resolv.conf 2>/dev/null || true; \
     }; \
     fix_dns; \
-    pip install --no-cache-dir -r /srv/req.musicdl -r /srv/req.lxmusic -r /srv/req.webui -r /srv/req.mp3api \
+    pip install --no-cache-dir -r /srv/req.musicdl -r /srv/req.lxmusic -r /srv/req.webui -r /srv/req.mp3api -r /srv/req.meow \
     || { echo "[WARN] pip 镜像源（${PIP_INDEX_URL}）安装失败，回退官方 PyPI 重试..." >&2; \
          pip install --no-cache-dir -i https://pypi.org/simple \
-            -r /srv/req.musicdl -r /srv/req.lxmusic -r /srv/req.webui -r /srv/req.mp3api; } \
+            -r /srv/req.musicdl -r /srv/req.lxmusic -r /srv/req.webui -r /srv/req.mp3api -r /srv/req.meow; } \
     && rm -f /srv/req.*
 
 RUN groupadd -g 1000 appuser \
@@ -216,8 +217,9 @@ COPY --chown=appuser:appuser \
     lxmusic-service/lx_vm_bridge.cjs \
     /srv/lxmusic-service/
 COPY --chown=appuser:appuser webui-service/app.py webui-service/config_jobs.py /srv/webui-service/
-# 第四音源适配器：单文件服务，FNMUSIC_ENV_FILE 由 supervisord 注入后只读 .env
+# 第四/第五音源适配器：单文件服务，FNMUSIC_ENV_FILE 由 supervisord 注入后只读 .env
 COPY --chown=appuser:appuser mp3api-service/app.py /srv/mp3api-service/
+COPY --chown=appuser:appuser meow-service/app.py /srv/meow-service/
 COPY --chown=appuser:appuser webui-service/static/ /srv/webui-service/static/
 # webui/lxmusic/musicbox 复用 proxy 模块（.env 安全合并 + 统一日志 fnlog），必须随镜像分发
 COPY --chown=appuser:appuser proxy/__init__.py proxy/direct_play.py proxy/env_merge.py proxy/fnlog.py proxy/llm_usage.py proxy/media_url.py proxy/netease_legacy.py proxy/publicplaylists.py proxy/quality_policy.py proxy/userstorage.py proxy/version.py /srv/proxy/

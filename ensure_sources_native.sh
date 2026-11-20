@@ -80,6 +80,7 @@ REQ_FILES=(
     "${BASE_DIR}/lxmusic-service/requirements.txt"
     "${BASE_DIR}/webui-service/requirements.txt"
     "${BASE_DIR}/mp3api-service/requirements.txt"
+    "${BASE_DIR}/meow-service/requirements.txt"
 )
 for req in "${REQ_FILES[@]}"; do
     if [ ! -f "${req}" ]; then

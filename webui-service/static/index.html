@@ -111,7 +111,7 @@
       <section class="page" id="page-source">
         <div class="page-head">
           <div>
-            <h2><span>音乐源（四选一）</span><button class="help-btn" type="button" data-help="providers" aria-label="音乐源帮助">?</button></h2>
+            <h2><span>音乐源（五选一）</span><button class="help-btn" type="button" data-help="providers" aria-label="音乐源帮助">?</button></h2>
             <p class="page-sub">主音源决定搜索与在线播放走哪个渠道。选好后点底部「保存并生效」，系统会自动切换对应服务进程。</p>
           </div>
         </div>
@@ -135,6 +135,11 @@
             <input type="radio" name="provider" value="mp3api">
             <div class="provider-head">Music MP3 API</div>
             <div class="provider-desc">自建 YouTube 音乐 API（yt-dlp + 本地缓存），支持局域网或远程部署</div>
+          </label>
+          <label class="provider-card" data-provider="meow">
+            <input type="radio" name="provider" value="meow">
+            <div class="provider-head">Meow 聚合总源</div>
+            <div class="provider-desc">酷我/网易/xfabe/QQ/酷狗/NCM/mp3api 等 10+ 音源聚合总源，原唱齐全</div>
           </label>
         </div>
 
@@ -234,6 +239,22 @@
               <label class="pt-field pt-field-num"><span>最长时长（秒）</span><input class="input" id="mp3api-max-duration" type="number" min="0" max="86400" value="900"></label>
             </div>
             <p class="hint">API Key 只保存在 NAS 的 .env 中，不会下发给客户端。<b>播放直连（Beta）必须保持关闭</b>：适配器不暴露带密钥的上游地址。首次点歌需要下载与转码，请耐心等待。详见 <code>mp3api-service/README.md</code>。</p>
+          </div>
+        </div>
+
+        <!-- meow：自建 Meow 聚合总源连接参数 -->
+        <div class="subpanel" id="panel-meow" hidden>
+          <div class="card">
+            <div class="card-title"><span>连接自建 Meow 聚合总源</span></div>
+            <div class="btn-row">
+              <label class="pt-field"><span>代理访问适配器地址</span><input class="input" id="meow-url" placeholder="http://127.0.0.1:8778"></label>
+              <label class="pt-field"><span>上游 Meow 总源地址</span><input class="input" id="meow-base-url" placeholder="http://192.168.2.220:2233 或 https://域名"></label>
+            </div>
+            <div class="btn-row">
+              <label class="pt-field"><span>上游 API Key</span><input class="input" id="meow-api-key" type="password" placeholder="留空表示上游未启用鉴权"></label>
+              <label class="pt-field pt-field-num"><span>上游超时（秒）</span><input class="input" id="meow-timeout" type="number" min="30" max="1800" value="300"></label>
+            </div>
+            <p class="hint">Meow 总源聚合酷我/网易/xfabe/QQ/酷狗/NCM/mp3api 等 10+ 音源，原唱齐全。API Key 只保存在 NAS 的 .env 中。<b>播放直连（Beta）必须保持关闭</b>。首次点歌需聚合搜索 + 转码，请耐心等待。详见 <code>meow-service/README.md</code>。</p>
           </div>
         </div>
 
@@ -801,8 +822,8 @@
     <p><b>服务连通性检查</b>会实际访问各组件的健康接口。若某项显示不可达，先看卡片里的原因，再检查对应音源是否配置正确。</p>
   </template>
   <template data-help-id="providers">
-    <p><b>一句话：</b>主音源四选一，决定平时搜歌、听歌走哪个渠道。切换后点底部「保存并生效」，系统会自动切换对应进程。第四个「Music MP3 API」是自建上游服务的适配器，需要自行部署上游并填写地址与 API Key。</p>
-    <p><b>怎么选？</b><br>· <b>网易云音乐</b>：有网易账号/会员，想同步歌单与每日推荐。<br>· <b>多平台聚合 (musicdl)</b>：不想登录，一次搜酷我、酷狗、QQ 等多个平台。<br>· <b>洛雪自定义源</b>：手里有洛雪 <code>.js</code> 音源脚本的进阶玩家。</p>
+    <p><b>一句话：</b>主音源五选一，决定平时搜歌、听歌走哪个渠道。切换后点底部「保存并生效」，系统会自动切换对应进程。「Music MP3 API」与「Meow 聚合总源」是自建上游服务的适配器，需要自行部署上游并填写地址。</p>
+    <p><b>怎么选？</b><br>· <b>网易云音乐</b>：有网易账号/会员，想同步歌单与每日推荐。<br>· <b>多平台聚合 (musicdl)</b>：不想登录，一次搜酷我、酷狗、QQ 等多个平台。<br>· <b>洛雪自定义源</b>：手里有洛雪 <code>.js</code> 音源脚本的进阶玩家。<br>· <b>Meow 聚合总源</b>：自建 10+ 音源聚合服务，原唱齐全。</p>
   </template>
   <template data-help-id="netease-login">
     <p>用手机「网易云音乐 App」扫一扫即可授权。登录状态保存在 NAS 数据目录，重启容器或设备都不会掉线。</p>

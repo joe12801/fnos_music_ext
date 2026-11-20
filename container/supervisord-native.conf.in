@@ -120,3 +120,16 @@ killasgroup=true
 stdout_logfile=@RUN@/mp3api.log
 stdout_logfile_maxbytes=0
 redirect_stderr=true
+
+[program:meow]
+directory=@REPO@/meow-service
+command="@VENV@/bin/uvicorn" app:app --host 127.0.0.1 --port 8778
+autostart=false
+autorestart=true
+startretries=5
+stopsignal=TERM
+stopasgroup=true
+killasgroup=true
+stdout_logfile=@RUN@/meow.log
+stdout_logfile_maxbytes=0
+redirect_stderr=true

@@ -19,14 +19,20 @@ const APP_BASE = "/app/fnmusic-ext";
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
-const PROVIDER_LABEL = { musicdl: "musicdl 聚合音源", netease: "网易云音乐", musicbox: "网易云音乐", lxmusic: "洛雪自定义源", mp3api: "Music MP3 API", none: "未配置" };
-const PROC_LABEL = { musicdl: "musicdl", netease: "netease", musicbox: "musicbox", lxserver: "lxserver", lxmusic: "lxmusic", mp3api: "mp3api", webui: "WebUI" };
+const PROVIDER_LABEL = { musicdl: "musicdl 聚合音源", netease: "网易云音乐", musicbox: "网易云音乐", lxmusic: "洛雪自定义源", mp3api: "Music MP3 API", meow: "Meow 聚合总源", none: "未配置" };
+const PROC_LABEL = { musicdl: "musicdl", netease: "netease", musicbox: "musicbox", lxserver: "lxserver", lxmusic: "lxmusic", mp3api: "mp3api", meow: "meow", webui: "WebUI" };
 const MP3API_DEFAULTS = {
   FNMUSIC_MP3API_URL: "http://127.0.0.1:8776",
   MP3API_BASE_URL: "http://127.0.0.1:8765",
   MP3API_API_KEY: "",
   MP3API_BITRATE: "192",
   MP3API_MAX_DURATION: "900",
+};
+const MEOW_DEFAULTS = {
+  FNMUSIC_MEOW_URL: "http://127.0.0.1:8778",
+  MEOW_BASE_URL: "http://192.168.2.220:2233",
+  MEOW_API_KEY: "",
+  MEOW_TIMEOUT: "300",
 };
 
 let configValues = {};   // GET /api/config 的 values
@@ -705,7 +711,8 @@ function applyConfigToForm() {
   const provider = v.FNMUSIC_NETEASE_ENABLED === "true" ? "musicbox"
     : v.FNMUSIC_MUSICDL_ENABLED === "true" ? "musicdl"
     : v.FNMUSIC_LX_ENABLED === "true" ? "lxmusic"
-    : v.FNMUSIC_MP3API_ENABLED === "true" ? "mp3api" : "";
+    : v.FNMUSIC_MP3API_ENABLED === "true" ? "mp3api"
+    : v.FNMUSIC_MEOW_ENABLED === "true" ? "meow" : "";
   $$("input[name=provider]").forEach((el) => { el.checked = el.value === provider; });
   syncProviderPanels(provider);
   // 第四音源 mp3api 连接参数（旧后端缺键时禁用控件，不提交未知键）
@@ -715,6 +722,14 @@ function applyConfigToForm() {
     const el = $(sel);
     if (!el) return;
     el.value = v[key] != null ? v[key] : (MP3API_DEFAULTS[key] || "");
+    el.disabled = !configSchema[key];
+  });
+  // 第五音源 meow 连接参数
+  [["#meow-url", "FNMUSIC_MEOW_URL"], ["#meow-base-url", "MEOW_BASE_URL"],
+   ["#meow-api-key", "MEOW_API_KEY"], ["#meow-timeout", "MEOW_TIMEOUT"]].forEach(([sel, key]) => {
+    const el = $(sel);
+    if (!el) return;
+    el.value = v[key] != null ? v[key] : (MEOW_DEFAULTS[key] || "");
     el.disabled = !configSchema[key];
   });
   if (provider === "musicbox") syncNeteaseAccount();
@@ -866,16 +881,22 @@ function collectConfig() {
   const provider = ($$("input[name=provider]").find((el) => el.checked) || {}).value || "";
   const mp3Bitrate = parseInt($("#mp3api-bitrate").value, 10);
   const mp3MaxDuration = parseInt($("#mp3api-max-duration").value, 10);
+  const meowTimeout = parseInt($("#meow-timeout").value, 10);
   const values = {
     FNMUSIC_MUSICDL_ENABLED: provider === "musicdl",
     FNMUSIC_NETEASE_ENABLED: provider === "musicbox",
     FNMUSIC_LX_ENABLED: provider === "lxmusic",
     FNMUSIC_MP3API_ENABLED: provider === "mp3api",
+    FNMUSIC_MEOW_ENABLED: provider === "meow",
     ...(configSchema.FNMUSIC_MP3API_URL ? { FNMUSIC_MP3API_URL: $("#mp3api-url").value.trim() } : {}),
     ...(configSchema.MP3API_BASE_URL ? { MP3API_BASE_URL: $("#mp3api-base-url").value.trim() } : {}),
     ...(configSchema.MP3API_API_KEY ? { MP3API_API_KEY: $("#mp3api-api-key").value.trim() } : {}),
     ...(configSchema.MP3API_BITRATE ? { MP3API_BITRATE: Number.isFinite(mp3Bitrate) ? mp3Bitrate : 192 } : {}),
     ...(configSchema.MP3API_MAX_DURATION ? { MP3API_MAX_DURATION: Number.isFinite(mp3MaxDuration) ? mp3MaxDuration : 900 } : {}),
+    ...(configSchema.FNMUSIC_MEOW_URL ? { FNMUSIC_MEOW_URL: $("#meow-url").value.trim() } : {}),
+    ...(configSchema.MEOW_BASE_URL ? { MEOW_BASE_URL: $("#meow-base-url").value.trim() } : {}),
+    ...(configSchema.MEOW_API_KEY ? { MEOW_API_KEY: $("#meow-api-key").value.trim() } : {}),
+    ...(configSchema.MEOW_TIMEOUT ? { MEOW_TIMEOUT: Number.isFinite(meowTimeout) ? meowTimeout : 300 } : {}),
     ...(configSchema.FNMUSIC_NETEASE_DIRECT_PLAY ? { FNMUSIC_NETEASE_DIRECT_PLAY: $("#direct-netease").checked } : {}),
     ...(configSchema.FNMUSIC_MUSICDL_DIRECT_PLAY ? { FNMUSIC_MUSICDL_DIRECT_PLAY: $("#direct-musicdl").checked } : {}),
     ...(configSchema.FNMUSIC_LX_DIRECT_PLAY ? { FNMUSIC_LX_DIRECT_PLAY: $("#direct-lx").checked } : {}),
@@ -1155,7 +1176,8 @@ function savedProvider() {
   return v.FNMUSIC_NETEASE_ENABLED === "true" ? "musicbox"
     : v.FNMUSIC_MUSICDL_ENABLED === "true" ? "musicdl"
     : v.FNMUSIC_LX_ENABLED === "true" ? "lxmusic"
-    : v.FNMUSIC_MP3API_ENABLED === "true" ? "mp3api" : "";
+    : v.FNMUSIC_MP3API_ENABLED === "true" ? "mp3api"
+    : v.FNMUSIC_MEOW_ENABLED === "true" ? "meow" : "";
 }
 
 // 点选未启用的音源：临时拉起其进程供预览（不写配置；5 分钟内未保存自动停止）
@@ -1180,6 +1202,7 @@ function syncProviderPanels(provider) {
   $("#panel-musicdl").hidden = provider !== "musicdl";
   $("#panel-lxmusic").hidden = provider !== "lxmusic";
   $("#panel-mp3api").hidden = provider !== "mp3api";
+  $("#panel-meow").hidden = provider !== "meow";
 }
 $$("input[name=provider]").forEach((el) =>
   el.addEventListener("change", async () => {
