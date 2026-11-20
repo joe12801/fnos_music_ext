@@ -8,6 +8,9 @@
 #   - 阿里云 ACR 国内镜像：
 #       FNMUSIC_IMAGE=crpi-wv2uaegt8g2y0g3c.cn-guangzhou.personal.cr.aliyuncs.com/joeloveqt-project/joeloveqt:3.1.2-meow \
 #         docker compose -f docker-compose.prebuilt.yml up -d
+#   - GitHub Container Registry（ghcr.io，公开镜像免登录）：
+#       FNMUSIC_IMAGE=ghcr.io/joe12801/fnos_music_ext:3.1.2-meow \
+#         docker compose -f docker-compose.prebuilt.yml up -d
 #
 # 与 docker-compose.yml 的区别：去掉 build 段，直接拉已发布镜像；其余端口、
 # 卷、健康检查完全一致。详见 docs/DOCKER_DEPLOY.md。

@@ -47,6 +47,10 @@ docker compose -f docker-compose.prebuilt.yml up -d
 # 或改用阿里云 ACR 国内镜像（国内网络更稳）
 FNMUSIC_IMAGE=crpi-wv2uaegt8g2y0g3c.cn-guangzhou.personal.cr.aliyuncs.com/joeloveqt-project/joeloveqt:3.1.2-meow \
   docker compose -f docker-compose.prebuilt.yml up -d
+
+# 或改用 GitHub Container Registry（ghcr.io，公开镜像免登录）
+FNMUSIC_IMAGE=ghcr.io/joe12801/fnos_music_ext:3.1.2-meow \
+  docker compose -f docker-compose.prebuilt.yml up -d
 ```
 
 镜像内已打包六个服务的运行依赖（Python + Node 22 + ffmpeg + supervisor）与洛雪
@@ -210,7 +214,18 @@ docker login --username=aliyun1109508239 \
 docker tag fnmusic-sources:3.1.2-meow \
   crpi-wv2uaegt8g2y0g3c.cn-guangzhou.personal.cr.aliyuncs.com/joeloveqt-project/joeloveqt:3.1.2-meow
 docker push crpi-wv2uaegt8g2y0g3c.cn-guangzhou.personal.cr.aliyuncs.com/joeloveqt-project/joeloveqt:3.1.2-meow
+
+# GitHub Container Registry（由 .github/workflows/docker-publish.yml 用内置
+# GITHUB_TOKEN 自动推送；手动推送需具备 write:packages 权限的 PAT）
+echo "$GH_PAT" | docker login ghcr.io --username joe12801 --password-stdin
+docker tag fnmusic-sources:3.1.2-meow ghcr.io/joe12801/fnos_music_ext:3.1.2-meow
+docker push ghcr.io/joe12801/fnos_music_ext:3.1.2-meow
 ```
+
+三个 registry 的 `3.1.2-meow` / `latest` 由同一份多架构 manifest 生成，
+digest 一致（含 `linux/amd64` + `linux/arm64`）；国内优先 ACR，境外优先
+Docker Hub / GHCR。GHCR package 首次推送默认是私有的，需在仓库
+Packages → `<package>` → Package settings 里改为 **Public** 才能免登录拉取。
 
 > 若 NAS 有 IPv6 但 Docker Hub 的 AAAA 记录不可达，`docker login/push` 会走 IPv6
 > 超时（curl 走 IPv4 却正常）。可在 `/etc/hosts` 为 `registry-1.docker.io`、
