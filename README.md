@@ -34,7 +34,7 @@
 | 能力 | 你可以做什么 |
 | :--- | :--- |
 | **原生入口** | 继续使用官方飞牛音乐 Web / App，无需换一套播放器 |
-| **四类音源** | 在 musicdl、网易云 netease、洛雪 lxmusic、自建 Music MP3 API（mp3api）中选择主音源 |
+| **五类音源** | 在 musicdl、网易云 netease、洛雪 lxmusic、自建 Music MP3 API（mp3api）、Meow 聚合总源（meow）中选择主音源 |
 | **在线搜索与播放** | 本地结果优先，在线结果随后展示，适配歌词、封面与客户端播放 |
 | **独立音质设置** | 在线播放与 App 下载分别选音质，支持七档偏好及缺档降级 |
 | **推荐与歌单** | 每日推荐、热门推荐、猜你喜欢，以及按用户或全部用户共享的公共歌单 |
@@ -42,7 +42,7 @@
 | **家庭多用户** | 在线收藏隔离，公共歌单支持个人配置或全部用户同步；网易账号歌单可跨主音源常驻 |
 | **集中管理** | 音源配置、主题、日志导出、更新检查与存储维护，一个入口完成 |
 
-**先了解四点：** 主音源四选一，并非同时聚合全部提供者；项目不附送可用的洛雪脚本；安装扩展不等于获得第三方平台的会员或付费内容权限；第四音源 mp3api 需自备上游 Music MP3 API 服务（本仓库只提供适配器，不提供该上游）。
+**先了解四点：** 主音源五选一，并非同时聚合全部提供者；项目不附送可用的洛雪脚本；安装扩展不等于获得第三方平台的会员或付费内容权限；第四音源 mp3api 与第五音源 meow 均需自备上游服务（本仓库只提供适配器，不提供上游）。
 
 ## 快速上手
 
@@ -92,7 +92,7 @@
 
 ## 音源怎么选
 
-**主音源四选一，可在管理页切换。** 同一提供者内的平台选择、洛雪多脚本激活、网易歌单常驻，不改变主音源单选规则。
+**主音源五选一，可在管理页切换。** 同一提供者内的平台选择、洛雪多脚本激活、网易歌单常驻，不改变主音源单选规则。
 
 | 主音源 | 适合场景 | 能力与边界 |
 | :--- | :--- | :--- |
@@ -100,8 +100,9 @@
 | **网易云 netease** | 网易搜索、账号歌单与推荐 | 支持扫码登录；会员、付费及试听限制仍由平台和账号决定 |
 | **洛雪 lxmusic** | 使用自己信任的自定义源脚本 | 搜索、歌词与榜单由内置平台接口提供，播放解析交给用户脚本；不提供或保证可用脚本 |
 | **Music MP3 API（mp3api）** | 已有自建 YouTube 音乐 API，想让飞牛音乐复用自己的搜索 / 缓存 / 转码链路 | 需自备上游服务与 API Key；输出 MP3，音质由 `MP3API_BITRATE` 决定；不提供无损 / Hi-Res 档；不支持播放直连 |
+| **Meow 聚合总源（meow）** | 已部署 [MeowMusicServer](https://github.com/joe12801/MeowMusicServer-multisource)（多源聚合），想让飞牛音乐复用其搜索 / 缓存 / 转码链路 | 需自备上游服务；适配器包装为 musicdl 契约并补全歌词 / 海报；不支持播放直连；详见 [适配器说明](meow-service/README.md) |
 
-musicdl 平台编号与短名见 [平台清单](musicdl-service/PLATFORMS.md)。洛雪兼容层基于 [XCQ0607/lxserver](https://github.com/XCQ0607/lxserver)，不保证所有第三方脚本兼容或长期有效。第四音源的上游服务、契约、安全约定与启用步骤见 [mp3api-service/README.md](mp3api-service/README.md)。
+musicdl 平台编号与短名见 [平台清单](musicdl-service/PLATFORMS.md)。洛雪兼容层基于 [XCQ0607/lxserver](https://github.com/XCQ0607/lxserver)，不保证所有第三方脚本兼容或长期有效。第四音源的上游服务、契约、安全约定与启用步骤见 [mp3api-service/README.md](mp3api-service/README.md)；第五音源见 [meow-service/README.md](meow-service/README.md)。
 
 ## 使用教程
 
@@ -237,6 +238,9 @@ chmod +x install.sh extend.sh restore.sh proxy/run_proxy.sh
 # Docker：洛雪 + 管理页，安装后自行导入脚本
 ./install.sh --non-interactive --sources lxmusic --webui --extend
 
+# Docker：第五音源 Meow 聚合总源 + 管理页（上游地址写在 .env）
+./install.sh --non-interactive --sources meow --webui --extend
+
 # native：无 Docker，网易云 + 管理页
 ./install.sh --deploy native --non-interactive --sources netease --webui --extend
 ```
@@ -258,7 +262,8 @@ native 模式会探测 Node.js、ffmpeg / ffprobe 等依赖；洛雪 v2.2.0 要�
 | 洛雪自动切源 / 平台优选 | `FNMUSIC_LX_AUTO_SWITCH` / `FNMUSIC_LX_PLATFORM_PREFERRED` | 分别为 `true` / `false` |
 | 洛雪脚本顺序 | `FNMUSIC_LX_SOURCE_ORDER` | 稳定脚本 ID 的 JSON 数组，建议在管理页排序 |
 | 三类音源直连 | `FNMUSIC_NETEASE_DIRECT_PLAY` / `FNMUSIC_MUSICDL_DIRECT_PLAY` / `FNMUSIC_LX_DIRECT_PLAY` | 均为 `false`，Beta；第四音源 mp3api 无直连能力，一律经代理取流 |
-| 第四音源 mp3api | `FNMUSIC_MP3API_ENABLED` / `FNMUSIC_MP3API_URL` / `MP3API_BASE_URL` / `MP3API_API_KEY` | 四选一开关之一；`8776`；上游地址与密钥只保存在 NAS `.env`，详见 [适配器说明](mp3api-service/README.md) |
+| 第四音源 mp3api | `FNMUSIC_MP3API_ENABLED` / `FNMUSIC_MP3API_URL` / `MP3API_BASE_URL` / `MP3API_API_KEY` | 五选一开关之一；`8776`；上游地址与密钥只保存在 NAS `.env`，详见 [适配器说明](mp3api-service/README.md) |
+| 第五音源 meow | `FNMUSIC_MEOW_ENABLED` / `FNMUSIC_MEOW_URL` / `MEOW_BASE_URL` / `MEOW_METADATA_ENABLED` | 五选一开关之一；`8778`；元数据补全默认开启，关闭后播放无歌词 / 海报；详见 [适配器说明](meow-service/README.md) |
 | 边听边存 | `FNMUSIC_TEE_SAVE_ENABLED` | `true` |
 | 下载 / 缓存目录 | `FNMUSIC_TEE_SAVE_DIR` / `FNMUSIC_CACHE_DIR` | 留空自动选择；必须分离 |
 | 目录布局 / 文件名 | `FNMUSIC_DOWNLOAD_LAYOUT` / `FNMUSIC_LIBRARY_NAME_PATTERN` | `flat` / `{artist} - {title}` |
@@ -303,7 +308,8 @@ fnmusic-ext 代理（宿主机 systemd）
                 ├── musicdl   127.0.0.1:8768
                 ├── netease   127.0.0.1:8770
                 ├── lxmusic   127.0.0.1:8772
-                └── mp3api    127.0.0.1:8776 ──► 外部 Music MP3 API
+                ├── mp3api    127.0.0.1:8776 ──► 外部 Music MP3 API
+                └── meow      127.0.0.1:8778 ──► MeowMusicServer 多源聚合
 
 飞牛桌面 / 管理员网关
         └── /app/fnmusic-ext/ ──► WebUI 127.0.0.1:8774
@@ -392,12 +398,14 @@ curl -s --unix-socket /var/run/trim_music.socket http://localhost/_ext/healthz
 | [搜索分页说明](docs/SEARCH_PAGINATION.md) | 本地优先、在线结果池与深分页设计 |
 | [musicdl 平台清单](musicdl-service/PLATFORMS.md) | 平台编号、短名与支持边界 |
 | [第四音源接入说明](docs/MP3API_INTEGRATION.md) | 架构决策、HTTP 契约、安全设计、部署编排与验证结果（本次改动总览） |
+| [Docker 部署指南](docs/DOCKER_DEPLOY.md) | 预构建镜像 / 本地构建、五选一 `.env`、端口与卷、第五音源配置、推送与回滚 |
+| [第五音源适配器说明](meow-service/README.md) | Meow 聚合总源的契约端点、元数据补全、密钥安全与启用步骤 |
 | [第四音源适配器说明](mp3api-service/README.md) | 自建 Music MP3 API 的契约端点、配置、密钥安全与启用步骤 |
 | [更新日志](CHANGELOG.md) | 正式版与预发布版的功能和修复记录 |
 | [贡献指南](CONTRIBUTING.md) | 开发约定、提交与验证要求 |
 | [安全反馈](SECURITY.md) | 安全边界及漏洞报告方式 |
 
-核心代码：`proxy/` 负责代理与业务适配；`netease-service/`、`musicdl-service/`、`lxmusic-service/`、`mp3api-service/` 提供音源；`webui-service/` 提供管理页；`container/` 管理服务编排；`packaging/fpk/` 构建应用包。
+核心代码：`proxy/` 负责代理与业务适配；`netease-service/`、`musicdl-service/`、`lxmusic-service/`、`mp3api-service/`、`meow-service/` 提供音源；`webui-service/` 提供管理页；`container/` 管理服务编排；`packaging/fpk/` 构建应用包。
 
 ```bash
 # 离线测试统一入口；需先按贡献指南与 CI 准备各服务依赖

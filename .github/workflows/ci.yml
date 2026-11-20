@@ -40,6 +40,7 @@ jobs:
           python -m pip install -r proxy/requirements.txt
           -r webui-service/requirements.txt
           -r mp3api-service/requirements.txt
+          -r meow-service/requirements.txt
           pytest pytest-asyncio mutagen qrcode pillow zxing-cpp PyYAML pytest-cov
 
       - name: Shell script syntax check
@@ -54,7 +55,7 @@ jobs:
           proxy/netease_legacy.py
           lxmusic-service/app.py lxmusic-service/lxserver_client.py lxmusic-service/verify_source.py
           musicdl-service/app.py musicdl-service/hardening.py
-          webui-service/app.py mp3api-service/app.py
+          webui-service/app.py mp3api-service/app.py meow-service/app.py
 
       - name: Node syntax check
         run: |
@@ -242,6 +243,23 @@ jobs:
             if docker exec "$name" python -c 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8001/healthz", timeout=2)'; then
               ready=1
               break
+            fi
+            sleep 1
+          done
+          test "$ready" = 1
+      - name: Verify on-demand meow healthz
+        if: matrix.arch == 'x64'
+        run: |
+          mkdir -p /tmp/fnrepo-meow
+          printf '%s\n' 'FNMUSIC_MEOW_ENABLED=true' 'FNMUSIC_WEBUI_ENABLED=false' > /tmp/fnrepo-meow/.env
+          name="fnmusic-ci-meow"
+          trap 'docker logs "$name"; docker rm -f "$name"' EXIT
+          docker run -d --name "$name" --network none \
+            -v /tmp/fnrepo-meow:/repo fnmusic-sources:ci
+          ready=0
+          for attempt in $(seq 1 40); do
+            if docker exec "$name" python -c 'import json,urllib.request; d=json.load(urllib.request.urlopen("http://127.0.0.1:8008/healthz",timeout=3)); assert d.get("provider")=="meow"' 2>/dev/null; then
+              ready=1; break
             fi
             sleep 1
           done

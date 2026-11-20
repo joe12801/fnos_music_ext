@@ -1,4 +1,5 @@
-# fnmusic-sources 统一镜像：musicdl + musicbox + lxmusic + webui + mp3api + meow 六进程（supervisor 管理，按需启动）
+# fnmusic-sources 统一镜像：musicdl + netease(musicbox) + lxserver + lxmusic + webui
+# + mp3api + meow 七进程（supervisor 管理，按 .env 五选一按需启动；lx 会连带拉起 lxserver）
 # 基础镜像引用可由 build args 覆盖（默认官方源；国内网络自动回退见根目录 ensure_base_image.sh）
 ARG BASE_IMAGE=python:3.13-slim
 FROM ${BASE_IMAGE} AS runtime-base
@@ -97,7 +98,8 @@ RUN set -eu; \
         /usr/local/CHANGELOG.md /usr/local/README.md; \
     npm cache clean --force
 
-# 五个服务的 Python 依赖并集（各自 requirements 独立演进，镜像统一安装）
+# 六个服务的 Python 依赖并集（musicdl/lxmusic/webui/mp3api/meow/netease 走 Node；
+# 各自 requirements 独立演进，镜像统一安装）
 # 构建容器 DNS 失败自愈同 apt 步骤（resolv.conf 改写不跨 RUN 层持久，需每步自带）；
 # 镜像源安装失败自动回退官方 PyPI 重试
 COPY musicdl-service/requirements.txt /srv/req.musicdl
@@ -237,7 +239,7 @@ RUN chmod 0755 /usr/local/bin/env_flag.sh /usr/local/bin/entrypoint.sh /usr/loca
     && chmod 0644 /etc/supervisor/supervisord.conf
 
 USER appuser
-EXPOSE 8001 8002 8003 8004 8006
+EXPOSE 8001 8002 8003 8004 8006 8008
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
     CMD ["/usr/local/bin/healthcheck.sh"]

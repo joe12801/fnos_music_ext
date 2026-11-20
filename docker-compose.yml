@@ -1,7 +1,9 @@
 # fnmusic-ext：五音源 + WebUI 合并为单容器 fnmusic-sources（supervisor 按需加载）。
 # 音源五选一：FNMUSIC_MUSICDL_ENABLED / FNMUSIC_NETEASE_ENABLED /
-#             FNMUSIC_LX_ENABLED / FNMUSIC_MP3API_ENABLED
+#             FNMUSIC_LX_ENABLED / FNMUSIC_MP3API_ENABLED / FNMUSIC_MEOW_ENABLED
 # 只写一个 true；entrypoint.sh 按 /repo/.env 只启动所选音源进程，未启用的不驻留内存。
+# 端口：8768 musicdl / 8770 netease / 8772 lxmusic / 8774 WebUI / 8776 mp3api / 8778 meow。
+# 已发布的预构建镜像（免本地编译）：见 docs/DOCKER_DEPLOY.md 与 docker-compose.prebuilt.yml。
 # 运行期切源在 WebUI（8774）内完成：写 .env + 同容器 supervisorctl stop/start，秒级生效。
 #
 # 基础镜像 / pip / apt 源可由根目录 .env 覆盖（FNMUSIC_BASE_IMAGE / FNMUSIC_PIP_INDEX /
