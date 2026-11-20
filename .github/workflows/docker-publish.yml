@@ -10,7 +10,7 @@
 #
 # GHCR 用内置 GITHUB_TOKEN（需 workflow permissions: packages: write，
 # 且仓库 Actions 默认 token 权限为 write），无需额外 secret；
-# 首次推送后请在 Packages 页面把 package 可见性改为 Public 以便免登录拉取。
+# package 自动关联本仓库并继承其 public 可见性，免登录即可拉取。
 # 首次使用需在仓库 Settings → Secrets and variables → Actions 添加：
 #   DOCKERHUB_USERNAME = joe1280
 #   DOCKERHUB_TOKEN    = <Docker Hub PAT>

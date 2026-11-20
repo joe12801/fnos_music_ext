@@ -37,6 +37,21 @@ Docker / native 都在宿主机）。只起容器、不装宿主机代理，飞�
 
 ## 3. 方式 A：预构建镜像（推荐，免本地编译）
 
+已发布多架构镜像（`linux/amd64` + `linux/arm64`），三个镜像源内容完全一致：
+
+| 镜像源 | 地址 | 适用场景 |
+| :--- | :--- | :--- |
+| Docker Hub（默认） | `joe1280/fnmusic-sources:3.1.2-meow` | 境外 / 网络通畅 |
+| 阿里云 ACR 个人版 | `crpi-wv2uaegt8g2y0g3c.cn-guangzhou.personal.cr.aliyuncs.com/joeloveqt-project/joeloveqt:3.1.2-meow` | 国内直连更稳 |
+| GitHub GHCR | `ghcr.io/joe12801/fnos_music_ext:3.1.2-meow` | 公开镜像，免登录 |
+
+**从零到可用只需四步：**
+
+1. 按 [INSTALL.md](INSTALL.md) 安装宿主机代理，确认 `systemctl is-active fnmusic-ext.service` 返回 `active`；
+2. 在仓库根目录准备 `.env`（主音源五选一只开一个，见第 5 节）；
+3. 执行下面的 `docker compose ... up -d`；
+4. 回到飞牛音乐重新搜索（第五音源需自备上游 MeowMusicServer）。
+
 ```bash
 cd /path/to/fnmusic_ext
 
@@ -224,8 +239,13 @@ docker push ghcr.io/joe12801/fnos_music_ext:3.1.2-meow
 
 三个 registry 的 `3.1.2-meow` / `latest` 由同一份多架构 manifest 生成，
 digest 一致（含 `linux/amd64` + `linux/arm64`）；国内优先 ACR，境外优先
-Docker Hub / GHCR。GHCR package 首次推送默认是私有的，需在仓库
-Packages → `<package>` → Package settings 里改为 **Public** 才能免登录拉取。
+Docker Hub / GHCR。
+
+GHCR 由 `.github/workflows/docker-publish.yml` 用内置 `GITHUB_TOKEN` 推送，
+package 会自动关联 `joe12801/fnos_music_ext` 仓库并继承其可见性（本仓库为
+**public**），因此**免登录即可 `docker pull`**（已实测匿名拉取 manifest 返回 200）。
+若改为手工用 PAT 推送，首次可能生成私有 package，需在仓库
+Packages → `<package>` → Package settings 里改为 **Public**。
 
 > 若 NAS 有 IPv6 但 Docker Hub 的 AAAA 记录不可达，`docker login/push` 会走 IPv6
 > 超时（curl 走 IPv4 却正常）。可在 `/etc/hosts` 为 `registry-1.docker.io`、

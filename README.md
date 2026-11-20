@@ -88,7 +88,7 @@
 
 ## 阅读导航
 
-[音源怎么选](#音源怎么选) · [使用教程](#使用教程) · [源码安装](#源码安装) · [配置与维护](#配置与维护) · [工作原理](#工作原理) · [常见问题](#常见问题) · [开发与文档](#开发与文档) · [免责与版权声明](#免责与版权声明) · [Star 支持](#star-支持)
+[音源怎么选](#音源怎么选) · [使用教程](#使用教程) · [Docker 部署](#docker-部署) · [源码安装](#源码安装) · [配置与维护](#配置与维护) · [工作原理](#工作原理) · [常见问题](#常见问题) · [开发与文档](#开发与文档) · [免责与版权声明](#免责与版权声明) · [Star 支持](#star-支持)
 
 ## 音源怎么选
 
@@ -210,6 +210,56 @@ musicdl 平台编号与短名见 [平台清单](musicdl-service/PLATFORMS.md)。
 「实验功能 → 垃圾清理」中的「清理垃圾文件（Beta）」用于清理遗留临时文件与过期日志，会展示回收空间。执行前请阅读风险提示并核对范围，不要将其视为曲库备份工具。
 
 </details>
+
+## Docker 部署
+
+默认形态：音源服务与 WebUI 跑在单个 `fnmusic-sources` 容器里，**宿主机代理
+`fnmusic-ext.service` 仍由 systemd 运行**（负责官方 Socket 接管与飞牛桌面网关），
+容器不挂 `docker.sock`。Docker 与 native 两种音源部署形态不可同时启用。
+
+前置：fnOS / Linux + Docker 24+ 与 `docker compose` v2；先按
+[安装指南](docs/INSTALL.md) 安装宿主机代理并确认 `fnmusic-ext.service` 为 active；
+仓库根目录准备 `.env`（从 [`.env.example`](.env.example) 复制，主音源五选一只开一个）。
+
+### 预构建镜像（推荐，免本地编译）
+
+已发布多架构镜像（`linux/amd64` + `linux/arm64`），三个镜像源内容完全一致：
+
+| 镜像源 | 地址 | 适用场景 |
+| :--- | :--- | :--- |
+| Docker Hub（默认） | `joe1280/fnmusic-sources:3.1.2-meow` | 境外 / 网络通畅 |
+| 阿里云 ACR | `crpi-wv2uaegt8g2y0g3c.cn-guangzhou.personal.cr.aliyuncs.com/joeloveqt-project/joeloveqt:3.1.2-meow` | 国内直连更稳 |
+| GitHub GHCR | `ghcr.io/joe12801/fnos_music_ext:3.1.2-meow` | 公开镜像，免登录 |
+
+```bash
+cd /path/to/fnmusic_ext
+
+# 默认 Docker Hub
+docker compose -f docker-compose.prebuilt.yml up -d
+
+# 国内改走 ACR 或 GHCR（二选一；也可写进 .env 的 FNMUSIC_IMAGE）
+FNMUSIC_IMAGE=ghcr.io/joe12801/fnos_music_ext:3.1.2-meow \
+  docker compose -f docker-compose.prebuilt.yml up -d
+```
+
+### 本地构建
+
+```bash
+docker compose up -d --build
+```
+
+### 验证与日常操作
+
+```bash
+docker compose -f docker-compose.prebuilt.yml ps
+curl -s http://127.0.0.1:8778/healthz | python3 -m json.tool   # 第五音源探活
+docker compose -f docker-compose.prebuilt.yml restart            # 改 .env 后重启
+docker compose -f docker-compose.prebuilt.yml down               # 回滚
+```
+
+回到官方飞牛音乐重新搜索即可。第五音源 meow 需自备上游 MeowMusicServer 并设置
+`MEOW_BASE_URL`；完整端口、卷、`.env` 键、镜像推送与故障排查见
+[Docker 部署指南](docs/DOCKER_DEPLOY.md)。
 
 ## 源码安装
 
