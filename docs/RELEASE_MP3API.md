@@ -7,8 +7,13 @@ v3.1.2 基础上，加入**第四类主音源 `mp3api`**，把自建 Music MP3 A
 - 本次改动：`52f8364` — `feat(source): 新增第四音源 mp3api，接入自建 Music MP3 API`
 - 安装版本：`3.1.2-0`（沿用上游，便于直接替换安装）
 - 发行 tag：`mp3api-3.1.2-1`
-- 发布包类型：**通用包 `platform=all`**（不含预构建 Docker 镜像与宿主 wheelhouse，
-  首次安装时在 NAS 上现场构建；这是项目官方支持的通用包形态）
+- 发布包类型：
+  - **通用包** `fnmusic-ext-3.1.2-0.fpk`（`platform=all`，约 41 MB）：不含预构建
+    Docker 镜像与宿主 wheelhouse，首次安装时在 NAS 上现场构建。
+  - **预构建镜像包** `fnmusic-ext-3.1.2-0-prebuilt-arm64.fpk`（约 490 MB）：
+    内置 `linux/arm64` Docker 镜像归档与宿主 wheelhouse，安装时离线导入，
+    不再现场 apt/pip 构建。适合飞牛 ARM 机型、离线或网络慢的环境。
+  - 如需 x86 机型，可用同一流水线产出 `...-prebuilt-amd64.fpk`。
 
 ---
 
@@ -16,8 +21,10 @@ v3.1.2 基础上，加入**第四类主音源 `mp3api`**，把自建 Music MP3 A
 
 | 文件 | 说明 |
 | :--- | :--- |
-| `fnmusic-ext-3.1.2-0.fpk` | 飞牛 fnOS 应用安装包（可在 NAS 上直接安装） |
-| `fnmusic-ext-3.1.2-0.fpk.sha256` | 校验文件 |
+| `fnmusic-ext-3.1.2-0.fpk` | 通用安装包（`platform=all`，首次安装在 NAS 上现场构建镜像，约 41 MB） |
+| `fnmusic-ext-3.1.2-0.fpk.sha256` | 通用包校验文件 |
+| `fnmusic-ext-3.1.2-0-prebuilt-arm64.fpk` | ARM64 预构建镜像包（内置 Docker 镜像 + wheelhouse，约 490 MB） |
+| `fnmusic-ext-3.1.2-0-prebuilt-arm64.fpk.sha256` | 预构建包校验文件 |
 | `RELEASE_MP3API.md` | 本说明 |
 | `MP3API_INTEGRATION.md` | 完整技术说明：架构、契约、安全、部署、验证、合规 |
 
@@ -25,7 +32,12 @@ v3.1.2 基础上，加入**第四类主音源 `mp3api`**，把自建 Music MP3 A
 
 ```bash
 sha256sum -c fnmusic-ext-3.1.2-0.fpk.sha256
+sha256sum -c fnmusic-ext-3.1.2-0-prebuilt-arm64.fpk.sha256
 ```
+
+**选哪个包**：ARM 机型（飞牛常见形态）优先用 `-prebuilt-arm64` 大包，安装更快、
+不依赖现场访问 apt / PyPI；x86 机型用通用包即可，或另外构建 `-prebuilt-amd64`。
+两者应用版本相同，安装后的配置与音源启用步骤完全一致。
 
 ---
 
@@ -114,8 +126,9 @@ musicdl 分支，因此搜索聚合、取链、Range/206、边听边存、封面
 本包为 **fork 自定义构建**，未改动上游的 VERSION / RELEASE_CHANNEL，因此
 `version.py` 计算出的正式 tag 仍是 `v3.1.2`；本发行版使用独立 tag
 `mp3api-3.1.2-1`（不带 `v` 前缀），避免误触发上游那条会构建三种变体
-（generic / prebuilt-amd64 / prebuilt-arm64）的正式发布流水线。若需要
-预构建镜像包，可在具备 Docker 的 Linux 环境另行执行官方 `release.yml`。
+（generic / prebuilt-amd64 / prebuilt-arm64）的正式发布流水线。预构建包由
+`.github/workflows/release-mp3api-prebuilt.yml` 在原生架构 runner 上调用官方
+`packaging/fpk/build.sh` 构建，并上传到同一个 Release，不会重建 Release 或覆盖通用包。
 
 ---
 
@@ -125,8 +138,10 @@ musicdl 分支，因此搜索聚合、取链、Range/206、边听边存、封面
 - 适配器离线契约测试 11 passed；相关回归合计 54 passed。
 - 真实链路冒烟：`/search` 返回 `mp3api:<id>`，`/stream` 返回
   `206 + Content-Range`，MP3 字节流正常。
-- CI 构建此 FPK 时额外校验包内必须存在 `repo/mp3api-service/app.py`，
+- CI 构建 FPK 时额外校验包内必须存在 `repo/mp3api-service/app.py`，
   确保第四音源确实随包交付。
+- 预构建包额外校验 `repo/assets/image/manifest.json` 的架构为 `linux/arm64`、
+  wheelhouse 满足 `proxy/requirements.txt`，并核对 FPK 与 `.sha256` 一致。
 
 已知环境限制（与本次改动无关）：Windows git-bash 下个别中文编码 / 并发时序测试
 不稳定，完整 `python scripts/run_tests.py` 建议在 Linux / CI 复跑。

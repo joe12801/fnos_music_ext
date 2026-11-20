@@ -1,0 +1,126 @@
+name: Release mp3api prebuilt FPK
+
+# 预构建镜像包：在原生架构 runner 上用官方 build.sh 构建
+#   FPK_IMAGE_ASSETS=require / FPK_IMAGE_ARCH=<arch>
+# 产出 fnmusic-ext-3.1.2-0-prebuilt-<arch>.fpk（内置 Docker 镜像归档 + 宿主 wheelhouse，
+# NAS 安装时不再现场构建），并上传到已存在的 mp3api Release。
+# 与 release-mp3api.yml（通用包）分开，避免重建 Release 时删掉大包资产。
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "已存在的 Release tag（上传目标，不会重建 Release）"
+        required: true
+        default: "mp3api-3.1.2-1"
+        type: string
+      arch:
+        description: "目标架构"
+        required: true
+        default: "arm64"
+        type: choice
+        options:
+          - arm64
+          - amd64
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-mp3api-prebuilt-${{ inputs.arch }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build prebuilt-${{ inputs.arch }}
+    runs-on: ${{ inputs.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    timeout-minutes: 180
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.tag }}
+      TARGET_ARCH: ${{ inputs.arch }}
+      FPK_IMAGE_ASSETS: require
+      FPK_IMAGE_ARCH: ${{ inputs.arch }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Show build identity
+        run: |
+          echo "commit       : $(git rev-parse HEAD)"
+          echo "version      : $(python3 proxy/version.py --format version)"
+          echo "arch         : ${TARGET_ARCH}"
+          echo "release tag  : ${TAG}"
+          echo "runner arch  : $(uname -m)"
+          command -v docker >/dev/null && docker version --format '{{.Server.Version}}' || true
+
+      - name: Verify target release exists
+        run: gh release view "$TAG" --json tagName,url
+
+      - name: Build prebuilt FPK (image + wheelhouse)
+        run: |
+          set -euo pipefail
+          ./packaging/fpk/build.sh
+          ls -lh dist/
+
+      - name: Verify prebuilt FPK structure and mp3api payload
+        run: |
+          set -euo pipefail
+          version="$(python3 proxy/version.py --format version)"
+          fpk="dist/fnmusic-ext-${version}-prebuilt-${TARGET_ARCH}.fpk"
+          test -s "$fpk"
+          test -s "${fpk}.sha256"
+          ( cd dist && sha256sum -c "$(basename "$fpk").sha256" )
+
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          # 清单先落盘再 grep：pipefail 下 tar | grep -q 会因 grep 提前退出让 tar 收到 SIGPIPE。
+          tar -tzf "$fpk" > "$tmp/fpk-top.txt"
+          for p in app.tgz cmd/main config/privilege config/resource \
+                   wizard/install manifest ICON.PNG ICON_256.PNG; do
+            grep -qx "$p" "$tmp/fpk-top.txt" || {
+              echo "ERROR: fpk 缺少顶层 $p" >&2; exit 1; }
+          done
+
+          tar -xzf "$fpk" -C "$tmp" app.tgz
+          tar -tzf "$tmp/app.tgz" > "$tmp/app-inner.txt"
+          for p in repo/proxy/app.py repo/mp3api-service/app.py \
+                   repo/mp3api-service/requirements.txt repo/FNMUSIC_COMPAT.json \
+                   repo/assets/image/manifest.json \
+                   repo/assets/image/fnmusic-sources-image.tar.gz \
+                   repo/assets/proxy-wheels/manifest.json; do
+            grep -qx "$p" "$tmp/app-inner.txt" || {
+              echo "ERROR: app.tgz 缺少 $p" >&2; exit 1; }
+          done
+
+          mkdir -p "$tmp/image" "$tmp/wheels"
+          tar -xzf "$tmp/app.tgz" -C "$tmp" repo/assets/image/manifest.json
+          tar -xzf "$tmp/app.tgz" -C "$tmp/image" \
+            repo/assets/image/fnmusic-sources-image.tar.gz \
+            repo/assets/proxy-wheels/manifest.json
+          python3 - "$tmp/repo/assets/image/manifest.json" "$TARGET_ARCH" <<'PY'
+          import json, pathlib, sys
+          manifest = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+          if manifest.get("arch") != sys.argv[2]:
+              raise SystemExit(f"镜像架构不符: {manifest.get('arch')} != {sys.argv[2]}")
+          if manifest.get("platform") != f"linux/{sys.argv[2]}":
+              raise SystemExit(f"镜像 platform 不符: {manifest.get('platform')}")
+          print(f"[ok] 镜像架构 {manifest['arch']} / {manifest['image_id'][:19]} / "
+                f"{manifest['archive_bytes']} bytes")
+          PY
+          python3 proxy/wheelhouse.py check \
+            --manifest "$tmp/image/repo/assets/proxy-wheels/manifest.json" \
+            --requirements proxy/requirements.txt
+          echo "[ok] 预构建镜像与 wheelhouse 均已随包交付，第四音源适配器存在"
+
+      - name: Upload assets to existing release
+        run: |
+          set -euo pipefail
+          version="$(python3 proxy/version.py --format version)"
+          fpk="dist/fnmusic-ext-${version}-prebuilt-${TARGET_ARCH}.fpk"
+          gh release upload "$TAG" "$fpk" "${fpk}.sha256" --clobber
+          # 发行说明同步描述预构建包；不改动通用包资产。
+          gh release edit "$TAG" --notes-file docs/RELEASE_MP3API.md
+          echo "=== release assets ==="
+          gh release view "$TAG" --json assets \
+            --jq '.assets[] | .name + " (" + (.size|tostring) + " bytes)"'
