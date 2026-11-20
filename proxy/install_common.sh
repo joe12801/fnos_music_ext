@@ -528,10 +528,13 @@ for key, value in zip(("REPO", "VENV", "DATA", "RUN", "NODE", "NODE_BIN_DIR", "F
     text = text.replace("@" + key + "@", value.replace("%", "%%"))
 text = text.replace("@SOURCES_PATH@", sources_path.replace("%", "%%"))
 
-if pathlib.Path(template).name == "supervisord-native.conf.in":
-    text = text.replace('WEBUI_SUPERVISORCTL="supervisorctl -c ',
-                        'WEBUI_SUPERVISORCTL="supervisorctl -c \'')
-    text = text.replace('/supervisord.conf"', '/supervisord.conf\'"')
+# 原生部署不再往 WEBUI_SUPERVISORCTL 注入内层单引号：supervisord 用 shlex
+# 解析 environment 时会吃掉结尾单引号，进程实际拿到
+# "supervisorctl -c '/path/supervisord.conf"（缺闭合引号），WebUI 的
+# shlex.split 抛 ValueError("No closing quotation")，导致 /api/status 500、
+# 运行期切源失效。模板渲染后的 "supervisorctl -c @RUN@/supervisord.conf"
+# 模板渲染后的 "supervisorctl -c @RUN@/supervisord.conf" 由 WebUI 侧的
+# supervisorctl() 容错拆分；含空格安装路径仍由该函数的 shlex 分支处理。
 sys.stdout.write(text)
 PY
 }

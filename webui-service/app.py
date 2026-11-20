@@ -441,7 +441,15 @@ def _save_remaining(limit: float = 55.0) -> float:
 def supervisorctl(*args: str, timeout: float = 20.0) -> tuple[int, str]:
     # WEBUI_SUPERVISORCTL 可携带参数（如 "supervisorctl -c /path/supervisord.conf"），
     # 按 shell 词法拆分；默认裸 "supervisorctl" 拆分后行为不变。
-    cmd = shlex.split(CONF["supervisorctl"]) + list(args)
+    # 原生部署兼容：部分 supervisord 版本用 shlex 解析 environment 时会吃掉
+    # 结尾单引号，进程拿到 "supervisorctl -c '/path/supervisord.conf"（缺闭合
+    # 引号），直接 shlex.split 抛 ValueError 会让 /api/status 500、切源失效。
+    # 回退为去引号按空白拆分；subprocess.run 用 list 传参，无需 shell 再解析。
+    raw = CONF["supervisorctl"]
+    try:
+        cmd = shlex.split(raw) + list(args)
+    except ValueError:
+        cmd = raw.replace("'", "").replace('"', "").split() + list(args)
     try:
         timeout = _save_remaining(timeout)
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
