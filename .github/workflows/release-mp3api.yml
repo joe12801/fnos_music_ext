@@ -69,17 +69,21 @@ jobs:
           test -s "$fpk"
           test -s "${fpk}.sha256"
           ( cd dist && sha256sum -c "$(basename "$fpk").sha256" )
-          for p in app.tgz cmd/main config/privilege config/resource \
-                   wizard/install manifest ICON.PNG ICON_256.PNG; do
-            tar -tzf "$fpk" | grep -qx "$p" || {
-              echo "ERROR: fpk 缺少顶层 $p" >&2; exit 1; }
-          done
           tmp="$(mktemp -d)"
           trap 'rm -rf "$tmp"' EXIT
+          # 先把清单落盘再 grep：pipefail 下 `tar | grep -q` 会因 grep 提前退出
+          # 让 tar 收到 SIGPIPE，把整条管道误判为失败。
+          tar -tzf "$fpk" > "$tmp/fpk-top.txt"
+          for p in app.tgz cmd/main config/privilege config/resource \
+                   wizard/install manifest ICON.PNG ICON_256.PNG; do
+            grep -qx "$p" "$tmp/fpk-top.txt" || {
+              echo "ERROR: fpk 缺少顶层 $p" >&2; exit 1; }
+          done
           tar -xzf "$fpk" -C "$tmp" app.tgz
+          tar -tzf "$tmp/app.tgz" > "$tmp/app-inner.txt"
           for p in repo/proxy/app.py repo/mp3api-service/app.py \
                    repo/mp3api-service/requirements.txt repo/FNMUSIC_COMPAT.json; do
-            tar -tzf "$tmp/app.tgz" | grep -qx "$p" || {
+            grep -qx "$p" "$tmp/app-inner.txt" || {
               echo "ERROR: app.tgz 缺少 $p" >&2; exit 1; }
           done
           echo "[ok] 第四音源适配器已随包交付"
