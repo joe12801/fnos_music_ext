@@ -1,0 +1,106 @@
+name: Release mp3api FPK
+
+# 自建 fork 的轻量发布流水线：只构建通用包（platform=all）并发布到 GitHub Releases。
+# 不复用官方 release.yml 的三变体矩阵（prebuilt-* 需要 Docker 镜像与 ARM runner，
+# 耗时长且对 fork 无必要）。tag 刻意不带 v 前缀，避免触发 release.yml 的 tags: ["v*"]。
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (do not use v* prefix)"
+        required: true
+        default: "mp3api-3.1.2-1"
+        type: string
+      title:
+        description: "Release title"
+        required: true
+        default: "fnmusic-ext 3.1.2-0 + mp3api 第四音源（FPK）"
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-mp3api
+  cancel-in-progress: false
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      TAG: ${{ inputs.tag }}
+      TITLE: ${{ inputs.title }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Show build identity
+        run: |
+          echo "commit : $(git rev-parse HEAD)"
+          echo "version: $(python3 proxy/version.py --format version)"
+          echo "tag    : $TAG"
+
+      - name: Download fnpack
+        run: |
+          curl -fsSL -o fnpack \
+            "https://static2.fnnas.com/fnpack/fnpack-1.2.3-linux-amd64"
+          chmod +x fnpack
+          sudo mv fnpack /usr/local/bin/fnpack
+
+      - name: Build generic FPK
+        env:
+          FPK_IMAGE_ASSETS: skip
+        run: |
+          ./packaging/fpk/build.sh
+          ls -la dist/
+
+      - name: Verify FPK structure and mp3api payload
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          packages=(dist/fnmusic-ext-*.fpk)
+          if [ "${#packages[@]}" -ne 1 ]; then
+            echo "ERROR: expected exactly one FPK, got ${#packages[@]}" >&2
+            exit 1
+          fi
+          fpk="${packages[0]}"
+          test -s "$fpk"
+          test -s "${fpk}.sha256"
+          ( cd dist && sha256sum -c "$(basename "$fpk").sha256" )
+          for p in app.tgz cmd/main config/privilege config/resource \
+                   wizard/install manifest ICON.PNG ICON_256.PNG; do
+            tar -tzf "$fpk" | grep -qx "$p" || {
+              echo "ERROR: fpk 缺少顶层 $p" >&2; exit 1; }
+          done
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          tar -xzf "$fpk" -C "$tmp" app.tgz
+          for p in repo/proxy/app.py repo/mp3api-service/app.py \
+                   repo/mp3api-service/requirements.txt repo/FNMUSIC_COMPAT.json; do
+            tar -tzf "$tmp/app.tgz" | grep -qx "$p" || {
+              echo "ERROR: app.tgz 缺少 $p" >&2; exit 1; }
+          done
+          echo "[ok] 第四音源适配器已随包交付"
+
+      - name: Create GitHub Release with FPK assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG 已存在，先清理以便重新发布"
+            gh release delete "$TAG" --yes --cleanup-tag >/dev/null 2>&1 || true
+          fi
+          shopt -s nullglob
+          files=(dist/fnmusic-ext-*.fpk dist/fnmusic-ext-*.fpk.sha256)
+          files+=(docs/RELEASE_MP3API.md docs/MP3API_INTEGRATION.md)
+          gh release create "$TAG" \
+            --target "$GITHUB_SHA" \
+            --title "$TITLE" \
+            --notes-file docs/RELEASE_MP3API.md \
+            "${files[@]}"
+          echo "=== release ==="
+          gh release view "$TAG" --json tagName,url,assets \
+            --jq '"url: " + .url, (.assets[] | "asset: " + .name + " (" + (.size|tostring) + " bytes)")'
