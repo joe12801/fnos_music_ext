@@ -11,8 +11,9 @@ NCM/GDStudio/mp3api/yuafeng…）包装成 fnmusic-ext 已有的 musicdl 音源 
 
 对外端点（与 musicdl-service 对齐）:
     GET /healthz                      健康检查
-    GET /sources                      平台列表
-    GET /search?keyword=&limit=       搜索，返回 {"ok":true,"items":[...],"errors":{},...}
+    GET /sources                      平台列表（配置了 MEOW_SOURCES 时列出可单独选的上游音源）
+    GET /search?keyword=&limit=[&sources=kuwo,bilibili]
+                                      搜索，返回 {"ok":true,"items":[...],"errors":{},...}
     GET /info?id=meow:<b64>           曲目元数据
     GET /stream?id=meow:<b64>&proxy=true   MP3 字节流，支持 Range / 206
 
@@ -22,14 +23,19 @@ NCM/GDStudio/mp3api/yuafeng…）包装成 fnmusic-ext 已有的 musicdl 音源 
     GET /stream_live?song=&singer=    -> 定长 MP3 字节流（Content-Length，无 chunked）
 
 元数据补全（歌词 / 海报 / 专辑 / 歌手 / 时长）:
-    上游 /api/search 恒空、缓存目录只有 music.mp3（无 cover.jpg / lyric.lrc），
+    上游搜索只给歌名/歌手/时长，缓存目录只有 music.mp3（无 cover.jpg / lyric.lrc），
     因此适配器内做一次轻量补全：网易云公开接口取专辑封面与 LRC，上游
     /stream_pcm 取真实歌手与时长。结果按 (song, singer) 缓存到内存 + 磁盘，
     /search 时预拉、/info 直接命中，避免代理 4s 硬超时；任何失败静默降级为空，
     绝不影响播放。可用 MEOW_METADATA_ENABLED=0 完全关闭。
 
-id 设计：Meow 搜索结果没有稳定 id，因此用可逆 base64url(song \\x1f singer)
-编码，保证 /info、/stream 无状态反查出 song/singer，适配器重启也不失效。
+id 设计：Meow 搜索结果没有稳定 id，因此用可逆 base64url 编码，保证 /info、
+/stream 无状态反查，适配器重启也不失效。载荷字段（\\x1f 分隔，尾部可缺省）：
+    song \\x1f singer \\x1f <上游音源名> \\x1f xid=<id>&bv=<bv>
+后两段是 v3.2 新增：上游 `/api/search` 会给每条结果一个 `url`，其中已经带好
+`xid`（喜马拉雅 trackId / 5sing fs: / 荔枝 lz:）或 `bv`（B 站）。这些内容靠
+「歌名+歌手」二次解析必然张冠李戴（同名播客被解析成同名歌曲），所以必须把
+取流参数一路带到 `/stream_live`。旧的两段式 id 仍然可用（向后兼容）。
 GUID 由代理生成 online:meow:<b64>，既不是 netease 也不是 lx，自动落 musicdl 分支。
 
 安全约定：
@@ -51,6 +57,7 @@ import logging
 import os
 import re
 import time
+import urllib.parse
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
@@ -72,6 +79,7 @@ def _load_dotenv() -> None:
     keys = (
         "MEOW_BASE_URL", "MEOW_API_KEY", "MEOW_TIMEOUT", "MEOW_SOURCE_NAME",
         "MEOW_MAX_DURATION", "MEOW_TRUST_ENV", "MEOW_LOG_LEVEL",
+        "MEOW_SOURCES", "MEOW_SOURCE_CONCURRENCY",
         "MEOW_METADATA_ENABLED", "MEOW_METADATA_BASE", "MEOW_METADATA_TIMEOUT",
         "MEOW_METADATA_TTL", "MEOW_METADATA_CACHE_DIR", "MEOW_METADATA_NETEASE",
         "MEOW_METADATA_PCM",
@@ -133,6 +141,50 @@ SOURCE = _env_str("MEOW_SOURCE_NAME", "meow")
 MAX_DURATION = _env_int("MEOW_MAX_DURATION", 0, 0, 86400)  # 0 = 不过滤
 TRUST_ENV = _env_str("MEOW_TRUST_ENV", "0").lower() in ("1", "true", "yes")
 
+# 上游 MeowMusicServer 的音源（键名与 Go 侧 search.go 的 switch 分支一一对应）。
+# 值只用于 /sources 展示；真正下发给上游的是键名本身。
+UPSTREAM_LABELS: dict[str, str] = {
+    "kuwo": "酷我音乐",
+    "netease": "网易云音乐",
+    "kugou": "酷狗音乐",
+    "qq": "QQ音乐",
+    "ximalaya": "喜马拉雅",
+    "fivesing": "5sing",
+    "lizhi": "荔枝FM",
+    "bilibili": "哔哩哔哩",
+    "qishui": "汽水音乐",
+    "ext": "扩展源",
+}
+
+
+def _normalize_source(token: str) -> str:
+    """接受 `bilibili` / `meow-bilibili` / `meow_bilibili` 三种写法，统一成上游键名。"""
+    key = str(token or "").strip().lower().replace("_", "-")
+    if key.startswith(SOURCE + "-"):
+        key = key[len(SOURCE) + 1:]
+    return key
+
+
+def _parse_source_list(raw: str) -> list[str]:
+    out: list[str] = []
+    for token in re.split(r"[,\s]+", str(raw or "")):
+        key = _normalize_source(token)
+        # `meow` 是聚合本身，不是上游音源；空 token 直接跳过。
+        if not key or key == SOURCE or key in out:
+            continue
+        if not re.fullmatch(r"[a-z0-9]+", key):
+            continue
+        out.append(key)
+    return out
+
+
+# 默认空 = 走上游聚合（不加 source 参数），行为与旧版完全一致。
+# 只有显式配置（或请求里带 sources）时才按音源逐个并发——每个音源上游都要
+# 现抓一遍，默认全开会把 Go 服务压满，所以不做「默认全开」。
+ENABLED_SOURCES = _parse_source_list(_env_str("MEOW_SOURCES", ""))
+# 逐个音源并发请求上游时的并流上限，避免一次搜索打爆单核小机器
+SOURCE_CONCURRENCY = _env_int("MEOW_SOURCE_CONCURRENCY", 4, 1, 10)
+
 
 def _env_bool(name: str, default: bool) -> bool:
     raw = os.environ.get(name)
@@ -149,7 +201,7 @@ def _env_float(name: str, default: float, low: float, high: float) -> float:
     return max(low, min(high, value))
 
 
-# 元数据补全：上游 /api/search 恒空且缓存目录只有 music.mp3，飞牛的歌词/海报
+# 元数据补全：上游搜索不带封面/歌词且缓存目录只有 music.mp3，飞牛的歌词/海报
 # 全靠本服务 /info 的 lyric / cover_url。这里用网易云公开接口补封面与 LRC，
 # 用上游 /stream_pcm 补真实歌手与时长。全程短超时 + 缓存 + 失败静默降级。
 META_ENABLED = _env_bool("MEOW_METADATA_ENABLED", True)
@@ -185,13 +237,21 @@ def _upstream_headers(extra: dict | None = None) -> dict[str, str]:
     return headers
 
 
-def _encode_id(song: str, singer: str) -> str:
-    raw = f"{song}{_SEP}{singer}".encode("utf-8")
+def _encode_id(song: str, singer: str, source: str = "", extra: str = "") -> str:
+    """编码曲目 id。source/extra 为空时退化成旧的两段式（向后兼容）。"""
+    fields = [song, singer]
+    if source or extra:
+        fields += [source, extra]
+    raw = _SEP.join(fields).encode("utf-8")
     return SOURCE + ":" + base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
 
 
-def _decode_id(raw: str) -> tuple[str, str]:
-    """接受 'meow:<b64>' / 'online:meow:<b64>'，返回 (song, singer)。"""
+def _decode_id(raw: str) -> tuple[str, str, str, str]:
+    """接受 'meow:<b64>' / 'online:meow:<b64>'，返回 (song, singer, source, extra)。
+
+    source 是上游音源键名（kuwo/bilibili/…），extra 是取流参数
+    （`xid=…&bv=…`，仅白名单键）。两者都可能为空串。
+    """
     s = str(raw or "").strip()
     if s.startswith("online:"):
         s = s[len("online:"):]
@@ -204,25 +264,49 @@ def _decode_id(raw: str) -> tuple[str, str]:
         decoded = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
     except (binascii.Error, UnicodeDecodeError):
         raise HTTPException(400, "invalid song id encoding")
-    song, sep, singer = decoded.partition(_SEP)
+    song, sep, rest = decoded.partition(_SEP)
     if not song or not sep:
         raise HTTPException(400, "invalid song id payload")
-    return song, singer
+    singer, sep2, tail = rest.partition(_SEP)
+    if not sep2:
+        return song, singer, "", ""
+    source, _, extra = tail.partition(_SEP)
+    return song, singer, source, extra
 
 
-def _error(keyword: str, message: str) -> dict:
-    return {"ok": False, "cached": False, "keyword": keyword, "items": [],
-            "errors": {SOURCE: message}, "engine": SOURCE}
+# 允许随 id 透传给上游 /stream_live 的取流参数白名单。只收这两个：它们决定
+# 「取哪一条具体的音频」（喜马拉雅/5sing/荔枝按 id 直取，B 站按 BV 号取流），
+# 其它任何参数都不透传，避免客户端借 id 改写上游请求。
+_PLAY_PARAM_KEYS = ("xid", "bv")
+
+
+def _play_extra(raw: dict) -> str:
+    """从上游结果的 url 里抽出取流参数，编码成 `xid=…&bv=…`。"""
+    url = str(raw.get("url") or raw.get("link") or "").strip()
+    if not url or "?" not in url:
+        return ""
+    query = urllib.parse.urlsplit(url).query
+    picked = [(k, v) for k, v in urllib.parse.parse_qsl(query, keep_blank_values=False)
+              if k in _PLAY_PARAM_KEYS and v]
+    return urllib.parse.urlencode(picked)
+
+
+def _extra_params(extra: str) -> dict[str, str]:
+    """把 id 里的 extra 还原成请求参数（同样只认白名单键）。"""
+    if not extra:
+        return {}
+    return {k: v for k, v in urllib.parse.parse_qsl(extra, keep_blank_values=False)
+            if k in _PLAY_PARAM_KEYS and v}
 
 
 def _fallback_raw_items(keyword: str, limit: int) -> list[dict]:
     """上游 /api/search 为空时的兜底候选。
 
     MeowMusicServer 的真实能力是「歌名(+歌手) → 最佳单曲」的点歌核心
-    (/stream_live?song=&singer=，10+ 音源聚合、定长 audio/mpeg)，而它的
-    /api/search 是个弱接口：只读工作目录下的 sources.json + 调用 yuafeng
-    旧 API，实测（192.168.2.220）恒返回空数组。因此当上游给不出曲目列表时，
-    把用户输入的关键词解析成 1~2 个可点播候选，点击后由 /stream 真实出音频：
+    (/stream_live?song=&singer=，10+ 音源聚合、定长 audio/mpeg)。新版
+    /api/search 在配了音源后会真实返回曲目；老版本（或没配 sources.json 的
+    实例）则恒返回空数组。所以当所有音源都给不出曲目列表时，把用户输入的
+    关键词解析成 1~2 个可点播候选，点击后由 /stream 真实出音频：
       * "晴天"          -> (song="晴天", singer="")
       * "晴天 周杰伦"   -> (song="晴天", singer="周杰伦") + (song="晴天 周杰伦", singer="")
     这样既保留「总源即点即播」的语义，又完全不需要改动上游 Go 服务。
@@ -248,8 +332,9 @@ def _fallback_raw_items(keyword: str, limit: int) -> list[dict]:
 
 
 # ---------------------------------------------------------------- 元数据补全
-# 背景：MeowMusicServer 的 /api/search 恒空，缓存目录只有 music.mp3（没有
-# cover.jpg / lyric.lrc），上游 /stream_pcm 的 lyric_url / cover_url 也为空。
+# 背景：MeowMusicServer 的搜索结果不带宽带封面/歌词（cover_url 多为空），
+# 缓存目录只有 music.mp3（没有 cover.jpg / lyric.lrc），上游 /stream_pcm 的
+# lyric_url / cover_url 也为空。
 # 而 fnmusic-ext 代理的歌词与封面完全取自音源 /info 的 lyric / cover_url：
 #   * proxy/_online_cover_delivery -> _online_info() -> /info["cover_url"]
 #   * proxy/resolve_online_lyric   -> _online_info() -> /info["lyric"]
@@ -595,6 +680,8 @@ async def healthz() -> dict:
         "upstream": BASE_URL,
         "api_key_configured": bool(API_KEY),
         "cache_entries": len(_ITEMS),
+        "sources": ENABLED_SOURCES,
+        "source_labels": {k: UPSTREAM_LABELS.get(k, k) for k in ENABLED_SOURCES},
         "meta_enabled": META_ENABLED,
         "meta_base": META_BASE,
         "meta_cache_entries": len(_META_MEM),
@@ -615,45 +702,91 @@ async def healthz() -> dict:
 
 @app.get("/sources")
 async def sources() -> dict:
-    return {"enabled": [SOURCE], "registered": [SOURCE]}
+    """聚合名本身永远在列；配了 MEOW_SOURCES 时再列出可单独选的上游音源。"""
+    enabled = [SOURCE] + [f"{SOURCE}-{key}" for key in ENABLED_SOURCES]
+    return {"enabled": enabled, "registered": enabled}
+
+
+async def _upstream_search(
+    client: httpx.AsyncClient, keyword: str, limit: int, source: str
+) -> list[dict]:
+    """向上游发一次搜索；source 为空表示走上游自己的聚合链路。"""
+    params: dict[str, str | int] = {"query": keyword, "limit": limit}
+    if source:
+        params["source"] = source
+    resp = await client.get("/api/search", params=params, headers=_upstream_headers())
+    if resp.status_code >= 400:
+        raise RuntimeError(f"upstream returned {resp.status_code}")
+    try:
+        payload = resp.json()
+    except ValueError as exc:
+        raise RuntimeError("upstream returned invalid JSON") from exc
+    # Meow /api/search 返回数组：[{title, artist, url, cover_url, lyric_url, duration, source}]
+    rows = payload if isinstance(payload, list) else (
+        payload.get("results") or payload.get("items") or [])
+    return [row for row in rows if isinstance(row, dict)]
 
 
 @app.get("/search")
 async def search(
     keyword: str = Query(..., min_length=1),
     limit: int = Query(10, ge=1, le=30),
-    sources: str = Query("", description="musicdl 平台白名单，本音源忽略"),
+    sources: str = Query(
+        "", description="要搜的上游音源（逗号分隔，如 kuwo,bilibili）；空=按 MEOW_SOURCES"),
 ) -> dict:
-    try:
-        resp = await app.state.upstream.get(
-            "/api/search",
-            params={"query": keyword},
-            headers=_upstream_headers(),
-        )
-    except Exception as exc:  # noqa: BLE001
-        LOG.warning("search upstream error: %s", type(exc).__name__)
-        return _error(keyword, f"upstream error: {type(exc).__name__}")
-    if resp.status_code >= 400:
-        return _error(keyword, f"upstream returned {resp.status_code}")
-    try:
-        payload = resp.json()
-    except ValueError:
-        return _error(keyword, "upstream returned invalid JSON")
+    # 请求没指定时用 .env 里配置的音源；两处都空 = 走上游聚合（不加 source 参数），
+    # 与旧版行为完全一致。
+    targets = _parse_source_list(sources) or ENABLED_SOURCES
+    if not targets:
+        targets = [""]
 
-    # Meow /api/search 返回数组：[{title, artist, url, cover_url, lyric_url, duration}]
-    raw_items = payload if isinstance(payload, list) else (payload.get("results") or payload.get("items") or [])
-    if not raw_items:
-        # 上游 /api/search 是弱接口：无 sources.json 时恒返回空数组（真机实测）。
-        # 兜底成可点播候选，点击后 /stream 走 /stream_live 真实出音频。
-        raw_items = _fallback_raw_items(keyword, limit)
-    items: list[dict] = []
-    for raw in raw_items:
-        if not isinstance(raw, dict):
+    semaphore = asyncio.Semaphore(SOURCE_CONCURRENCY)
+
+    async def run_one(name: str) -> tuple[str, "list[dict] | Exception"]:
+        async with semaphore:
+            try:
+                return name, await _upstream_search(
+                    app.state.upstream, keyword, limit, name)
+            except Exception as exc:  # noqa: BLE001 - 单源失败不拖垮其它源
+                return name, exc
+
+    errors: dict[str, str] = {}
+    # 每个音源单独排队，最后**轮转**合并：如果只是按顺序拼接，排在第一的音源
+    # 一旦就返回了 limit 条，后面几个源一条都露不出来（实测 6 源搜「晴天」，
+    # 结果全是 kuwo）。轮转保证每个音源都先露一次脸。
+    queues: list[list[tuple[str, dict]]] = []
+    for name, result in await asyncio.gather(*(run_one(t) for t in targets)):
+        if isinstance(result, Exception):
+            LOG.warning("search %s failed: %s", name or SOURCE, result)
+            errors[name or SOURCE] = str(result)
             continue
+        queues.append([(name, row) for row in result])
+
+    raw_items: list[tuple[str, dict]] = []
+    depth = 0
+    while any(depth < len(queue) for queue in queues):
+        for queue in queues:
+            if depth < len(queue):
+                raw_items.append(queue[depth])
+        depth += 1
+
+    if not raw_items:
+        # 全部上游音源都空时才兜底成可点播候选，点击后 /stream 走 /stream_live
+        # 真实出音频。注意这不再是「上游恒空」的补丁：MeowMusicServer 新版
+        # /api/search 在配置了音源后会真实返回曲目（kuwo/netease/kugou/
+        # ximalaya/fivesing/bilibili/qishui/ext 实测均有结果）。
+        raw_items = [("", row) for row in _fallback_raw_items(keyword, limit)]
+    items: list[dict] = []
+    seen_keys: set[str] = set()
+    for item_source, raw in raw_items:
         title = str(raw.get("title") or "").strip()
         if not title:
             continue
         artist = str(raw.get("artist") or "").strip()
+        # 去重键只认歌名+歌手，跨源命中同一首歌时保留先到的（按 MEOW_SOURCES 顺序）
+        dedupe = f"{title.casefold()}\x00{artist.casefold()}"
+        if dedupe in seen_keys:
+            continue
         try:
             duration = int(raw.get("duration") or 0)
         except (TypeError, ValueError):
@@ -661,11 +794,17 @@ async def search(
         if MAX_DURATION and duration > MAX_DURATION:
             LOG.info("skip over-long track %s (%ss > %ss)", title, duration, MAX_DURATION)
             continue
-        song_id = _encode_id(title, artist)
+        # 上游每条结果自带 source（聚合模式下也能拿到是哪家给的）；配了单源就以
+        # 单源为准，避免聚合结果里混进别的音源。
+        upstream_source = item_source or str(raw.get("source") or "").strip()
+        extra = _play_extra(raw)
+        song_id = _encode_id(title, artist, upstream_source, extra)
         cover = str(raw.get("cover_url") or "")
         item = {
             "id": song_id,
             "source": SOURCE,
+            # 真实音源，仅供诊断/前端展示；代理不依赖这个字段
+            "upstream_source": upstream_source,
             "title": title,
             "artist": artist,
             "album": str(raw.get("album") or ""),
@@ -693,6 +832,7 @@ async def search(
             if not item["duration_s"] and cached_meta.get("duration_s"):
                 item["duration_s"] = cached_meta["duration_s"]
         _schedule_meta(title, artist)
+        seen_keys.add(dedupe)
         _ITEMS[song_id] = item
         items.append(item)
         if len(items) >= limit:
@@ -700,15 +840,15 @@ async def search(
     if len(_ITEMS) > 2000:
         for stale in list(_ITEMS)[: len(_ITEMS) - 2000]:
             _ITEMS.pop(stale, None)
-    LOG.info("search '%s' -> %d items", keyword, len(items))
+    LOG.info("search '%s' sources=%s -> %d items", keyword, ",".join(targets), len(items))
     return {"ok": True, "cached": False, "keyword": keyword,
-            "items": items, "errors": {}, "engine": SOURCE}
+            "items": items, "errors": errors, "engine": SOURCE}
 
 
 @app.get("/info")
 async def info(id: str = Query(...)) -> dict:
-    song, singer = _decode_id(id)
-    song_id = _encode_id(song, singer)
+    song, singer, upstream_source, extra = _decode_id(id)
+    song_id = _encode_id(song, singer, upstream_source, extra)
     cached = _ITEMS.get(song_id, {})
     # 代理 /_online_info 对音源 /info 有 4s 硬超时；这里给补全留一个更紧的
     # 预算，超时/失败一律返回空，保证曲目详情与播放永不因元数据卡住。
@@ -748,8 +888,8 @@ async def stream(
     proxy: bool = Query(False, description="false=302 到本服务 proxy=true（不暴露上游地址）"),
     quality: str = Query("", description="保留参数以兼容 musicdl 契约，本音源固定 mp3"),
 ):
-    song, singer = _decode_id(id)
-    song_id = _encode_id(song, singer)
+    song, singer, upstream_source, extra = _decode_id(id)
+    song_id = _encode_id(song, singer, upstream_source, extra)
     if not proxy:
         return RedirectResponse("/stream?id=" + song_id + "&proxy=true", status_code=302)
 
@@ -758,9 +898,12 @@ async def stream(
     headers = _upstream_headers()
     headers["Accept-Encoding"] = "identity"
     client: httpx.AsyncClient = app.state.upstream
+    # xid / bv 决定「取哪一条具体音频」：喜马拉雅/5sing/荔枝按 id 直取，B 站按
+    # BV 号取流。丢了它们只能按歌名+歌手二次解析，同名播客会被解析成同名歌曲。
+    play_params = {"song": song, "singer": singer, **_extra_params(extra)}
     req = client.build_request(
         "GET", "/stream_live",
-        params={"song": song, "singer": singer},
+        params=play_params,
         headers=headers,
     )
     try:

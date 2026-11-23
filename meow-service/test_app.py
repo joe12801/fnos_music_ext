@@ -113,7 +113,7 @@ def test_info_roundtrip(client):
     j = c.get("/search", params={"keyword": "晴天"}).json()
     sid = j["items"][0]["id"]
     # id 可逆：解码必须还原原始歌名/歌手（含中文）
-    song, singer = mod._decode_id(sid)
+    song, singer, _, _ = mod._decode_id(sid)
     assert song == "晴天" and singer == "周杰伦"
     info = c.get("/info", params={"id": sid}).json()
     assert info["ok"] is True and info["id"] == sid
@@ -124,7 +124,7 @@ def test_info_roundtrip(client):
 def test_info_accepts_online_guid(client):
     c, _, mod = client
     sid = mod._encode_id("晴天", "周杰伦")
-    song, singer = mod._decode_id("online:" + sid)
+    song, singer, _, _ = mod._decode_id("online:" + sid)
     assert song == "晴天" and singer == "周杰伦"
 
 
@@ -215,7 +215,7 @@ def test_fallback_single_keyword(empty_search_client):
     assert j["ok"] is True and len(j["items"]) == 1
     item = j["items"][0]
     assert item["title"] == "晴天" and item["id"].startswith("meow:")
-    song, singer = mod._decode_id(item["id"])
+    song, singer, _, _ = mod._decode_id(item["id"])
     assert song == "晴天" and singer == ""
 
 
@@ -224,9 +224,9 @@ def test_fallback_song_singer_split(empty_search_client):
     c, _, mod = empty_search_client
     j = c.get("/search", params={"keyword": "晴天 周杰伦"}).json()
     assert len(j["items"]) == 2
-    song, singer = mod._decode_id(j["items"][0]["id"])
+    song, singer, _, _ = mod._decode_id(j["items"][0]["id"])
     assert (song, singer) == ("晴天", "周杰伦")
-    song2, singer2 = mod._decode_id(j["items"][1]["id"])
+    song2, singer2, _, _ = mod._decode_id(j["items"][1]["id"])
     assert (song2, singer2) == ("晴天 周杰伦", "")
 
 
@@ -405,3 +405,129 @@ def test_metadata_disabled_contract(client):
     sid = c.get("/search", params={"keyword": "晴天"}).json()["items"][0]["id"]
     info = c.get("/info", params={"id": sid}).json()
     assert info["lyric"] == "" and info["duration_s"] == 269
+
+
+# ---- 多音源（v3.2）：单个上游音源可选、取流参数随 id 走 ----
+KW_ROWS = [
+    {"title": "晴天", "artist": "周杰伦", "duration": 269, "source": "kuwo",
+     "url": "http://upstream.test/stream_live?song=%E6%99%B4%E5%A4%A9&singer=%E5%91%A8%E6%9D%B0%E4%BC%A6"},
+]
+BV_ROWS = [
+    # B 站结果：url 里带 bv，播放必须按 BV 号取流，否则会解析成别的版本
+    {"title": "晴天 (Live)", "artist": "某UP主", "duration": 300, "source": "bilibili",
+     "url": "http://upstream.test/stream_live?song=x&singer=y&bv=BV1xx411c7mD"},
+    # 与酷我同名同歌手：跨源去重后只应保留一条
+    {"title": "晴天", "artist": "周杰伦", "duration": 269, "source": "bilibili",
+     "url": "http://upstream.test/stream_live?song=x&singer=y&bv=BV1yy411c7mE"},
+]
+
+
+@pytest.fixture()
+def multi_source_client(monkeypatch):
+    """MEOW_SOURCES=kuwo,bilibili：验证按音源分发与 id 内嵌取流参数。"""
+    seen: list[httpx.Request] = []
+    monkeypatch.setenv("MEOW_BASE_URL", "http://upstream.test")
+    monkeypatch.setenv("MEOW_NO_DOTENV", "1")
+    monkeypatch.setenv("MEOW_METADATA_ENABLED", "0")
+    monkeypatch.setenv("MEOW_SOURCES", "kuwo, bilibili")
+    monkeypatch.setenv("MEOW_TIMEOUT", "30")
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.url.path == "/api/search":
+            src = request.url.params.get("source", "")
+            rows = BV_ROWS if src == "bilibili" else (KW_ROWS if src == "kuwo" else KW_ROWS + BV_ROWS)
+            return httpx.Response(200, json=rows)
+        if request.url.path == "/stream_live":
+            return httpx.Response(200, content=FAKE_MP3, headers={
+                "content-type": "audio/mpeg", "content-length": str(len(FAKE_MP3)),
+                "accept-ranges": "bytes",
+            })
+        return httpx.Response(200, text="ok")
+
+    spec = importlib.util.spec_from_file_location("meow_app_multi_test", APP_PATH)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["meow_app_multi_test"] = mod
+    spec.loader.exec_module(mod)
+
+    real_async_client = httpx.AsyncClient
+
+    def factory(*args, **kwargs):
+        kwargs.pop("transport", None)
+        return real_async_client(transport=httpx.MockTransport(handle), *args, **kwargs)
+
+    monkeypatch.setattr(mod.httpx, "AsyncClient", factory)
+    with TestClient(mod.app) as c:
+        yield c, seen, mod
+
+
+def test_sources_lists_configured_upstreams(multi_source_client):
+    c, _, _ = multi_source_client
+    body = c.get("/sources").json()
+    assert body["enabled"] == ["meow", "meow-kuwo", "meow-bilibili"]
+    assert body["registered"] == body["enabled"]
+
+
+def test_search_defaults_to_configured_sources(multi_source_client):
+    """不传 sources 时按 MEOW_SOURCES 逐个音源并发请求上游。"""
+    c, seen, _ = multi_source_client
+    j = c.get("/search", params={"keyword": "晴天", "limit": 10}).json()
+    assert j["ok"] is True and j["errors"] == {}
+    asked = sorted(r.url.params.get("source") for r in seen if r.url.path == "/api/search")
+    assert asked == ["bilibili", "kuwo"]
+    # 跨源同名同歌手去重：晴天/周杰伦只留一条（kuwo 先到）
+    titles = [(i["title"], i["artist"]) for i in j["items"]]
+    assert titles.count(("晴天", "周杰伦")) == 1
+    assert ("晴天 (Live)", "某UP主") in titles
+
+
+def test_search_sources_param_overrides_env(multi_source_client):
+    """请求里的 sources 优先于 MEOW_SOURCES，且只打指定的那个音源。"""
+    c, seen, mod = multi_source_client
+    c.get("/search", params={"keyword": "晴天", "sources": "meow-bilibili"})
+    asked = [r.url.params.get("source") for r in seen if r.url.path == "/api/search"]
+    assert asked == ["bilibili"]
+    assert mod._parse_source_list("meow_bilibili, lizhi") == ["bilibili", "lizhi"]
+
+
+def test_id_roundtrips_upstream_source_and_play_params(multi_source_client):
+    c, _, mod = multi_source_client
+    j = c.get("/search", params={"keyword": "晴天", "sources": "bilibili"}).json()
+    live = next(i for i in j["items"] if i["title"] == "晴天 (Live)")
+    song, singer, src, extra = mod._decode_id(live["id"])
+    assert (song, singer, src) == ("晴天 (Live)", "某UP主", "bilibili")
+    assert extra == "bv=BV1xx411c7mD"
+
+
+def test_stream_replays_xid_and_bv(multi_source_client):
+    """点播必须把 id 里的 bv 带给上游 /stream_live，否则会放成别的版本。"""
+    c, seen, _ = multi_source_client
+    j = c.get("/search", params={"keyword": "晴天", "sources": "bilibili"}).json()
+    sid = next(i for i in j["items"] if i["title"] == "晴天 (Live)")["id"]
+    r = c.get("/stream", params={"id": sid, "proxy": "true"})
+    assert r.status_code == 200 and r.content == FAKE_MP3
+    req = next(x for x in seen if x.url.path == "/stream_live")
+    assert req.url.params.get("bv") == "BV1xx411c7mD"
+    assert req.url.params.get("song") == "晴天 (Live)"
+
+
+def test_legacy_two_field_id_still_works(multi_source_client):
+    """旧版两段式 id（只有 song/singer）必须继续可解，避免升级后历史记录失效。"""
+    c, _, mod = multi_source_client
+    legacy = mod._encode_id("晴天", "周杰伦")
+    assert mod._decode_id(legacy) == ("晴天", "周杰伦", "", "")
+    assert c.get("/info", params={"id": legacy}).json()["title"] == "晴天"
+
+
+def test_search_interleaves_sources(multi_source_client):
+    """轮转合并：排在第一的音源不能把 limit 名额占满，各家都要露脸。"""
+    c, _, _ = multi_source_client
+    items = c.get("/search", params={"keyword": "晴天", "limit": 2}).json()["items"]
+    assert [i["upstream_source"] for i in items] == ["kuwo", "bilibili"]
+
+
+def test_search_interleaves_sources(multi_source_client):
+    """轮转合并：排在第一的音源不能把 limit 名额占满，各家都要露脸。"""
+    c, _, _ = multi_source_client
+    items = c.get("/search", params={"keyword": "晴天", "limit": 2}).json()["items"]
+    assert [i["upstream_source"] for i in items] == ["kuwo", "bilibili"]

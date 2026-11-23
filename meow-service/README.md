@@ -45,19 +45,57 @@ MeowMusicServer  (/api/search  /stream_live)
 |---|---|
 | `GET /healthz` | 健康检查，探测上游根路径 |
 | `GET /sources` | `{"enabled":["meow"],"registered":["meow"]}` |
-| `GET /search?keyword=&limit=[&sources=]` | 调上游 `/api/search`；恒空时兜底成可点播候选；命中元数据缓存时直接带封面/专辑/时长 |
+| `GET /search?keyword=&limit=[&sources=]` | 调上游 `/api/search`；一条都没有时才兜底成可点播候选；命中元数据缓存时直接带封面/专辑/时长 |
 | `GET /info?id=meow:<b64>` | 从可逆 id / 搜索缓存 + 元数据补全返回曲目元数据（含 `cover_url`、`lyric`） |
 | `GET /stream?id=meow:<b64>&proxy=true` | 调上游 `/stream_live`，支持 `Range` / 206，透传定长字节流 |
 
 条目 id 一律为 `meow:<base64url(song\x1fsinger)>`，可逆、无状态，适配器重启也不失效。
 代理据此生成 `online:meow:<b64>`，既不是 `netease` 也不是 `lx`，因此自动落入 musicdl 分支。
 
-## 歌词与海报（元数据补全）
+## 接入上游的具体音源（v3.2）
 
-上游 MeowMusicServer 的 `/api/search` 恒返回空数组，缓存目录里也只有 `music.mp3`
-（没有 `cover.jpg` / `lyric.lrc`），而飞牛代理的封面出口和歌词出口分别读取音源
-`/info` 的 `cover_url` 与 `lyric`。若不补全，meow 源的歌曲能播但**没有歌词、海报、
-专辑和时长**。
+上游 MeowMusicServer 本身是「多音源聚合」：`/api/search?query=&source=<键名>` 可以
+指定只搜某一家。本适配器把这件事透出来，配置 `MEOW_SOURCES` 即可：
+
+```dotenv
+MEOW_SOURCES=kuwo,bilibili,ximalaya
+```
+
+| 键名 | 平台 | 键名 | 平台 |
+|---|---|---|---|
+| `kuwo` | 酷我音乐 | `fivesing` | 5sing |
+| `netease` | 网易云音乐 | `lizhi` | 荔枝 FM |
+| `kugou` | 酷狗音乐 | `bilibili` | 哔哩哔哩 |
+| `qq` | QQ 音乐 | `qishui` | 汽水音乐 |
+| `ximalaya` | 喜马拉雅 | `ext` | 扩展源（mp3api 类） |
+
+行为：
+
+- **空（默认）**：完全不发 `source` 参数，走上游自己的聚合链路——与旧版逐字一致，
+  一行配置都不用改。
+- **配了值**：`/search` 按顺序逐个音源**并发**请求上游（并发上限
+  `MEOW_SOURCE_CONCURRENCY`），结果按「歌名+歌手」跨源去重后合并；`/sources`
+  会列出 `meow` 与 `meow-<键名>`，`/search?sources=meow-bilibili` 可临时只搜一家。
+- 单个音源失败只记进 `errors`，不影响其它音源出结果。
+- 全部音源都空时才退化成「歌名 → 可点播候选」的兜底。
+
+### 为什么 id 要带 xid / bv
+
+上游 `/api/search` 每条结果都带一个 `url`，里面已经钉好了「取哪一条具体音频」：
+
+- 喜马拉雅 `xid=<trackId>`、5sing `xid=fs:<songId>:<type>`、荔枝 `xid=lz:<voiceId>:<日期>`
+- B 站 `bv=BV1xxxxxxxxx`
+
+这些内容靠「歌名+歌手」二次解析**必然张冠李戴**——搜到的播客会被解析成同名的歌，
+B 站的不同现场版会互相串台。所以适配器把这两个参数编码进 id（`xid`/`bv` 白名单，
+其它参数一律不透传），`/stream` 再原样带到 `/stream_live`。id 仍是可逆 base64url，
+适配器重启不失效；旧的两段式 id（只有 song/singer）继续可用。
+
+## 歌词与海报（元数据补全）
+上游 MeowMusicServer 的搜索结果只给歌名 / 歌手 / 时长（`cover_url` 多为空），缓存目录里
+也只有 `music.mp3`（没有 `cover.jpg` / `lyric.lrc`），而飞牛代理的封面出口和歌词出口
+分别读取音源 `/info` 的 `cover_url` 与 `lyric`。若不补全，meow 源的歌曲能播但**没有歌词、
+海报、专辑和时长**。
 
 本服务因此内置一层轻量补全（默认开启，可关闭）：
 
@@ -95,6 +133,8 @@ MeowMusicServer  (/api/search  /stream_live)
 | `MEOW_API_KEY` | 空 | 上游 API Key（如上游启用鉴权），**只保存在服务端** |
 | `MEOW_TIMEOUT` | `300` | 上游超时秒；首次请求需转码，别设太小 |
 | `MEOW_SOURCE_NAME` | `meow` | 音源短名（GUID 前缀） |
+| `MEOW_SOURCES` | 空 | 接入哪些上游音源（逗号分隔，见下节）；空 = 只用上游聚合搜索 |
+| `MEOW_SOURCE_CONCURRENCY` | `4` | 逐个音源并发请求上游时的并流上限 |
 | `MEOW_MAX_DURATION` | `0` | 搜索阶段剔除超过该秒数的曲目；`0` = 不过滤 |
 | `MEOW_TRUST_ENV` | `0` | 是否让 httpx 读取 `HTTP_PROXY` 等环境代理 |
 | `FNMUSIC_MEOW_ENABLED` | `false` | **代理侧**开关 |
