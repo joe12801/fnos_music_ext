@@ -32,6 +32,17 @@ WORKDIR /srv
 # 镜像源与官方源都取不到索引才判失败。安装完成后恢复官方源，宿主机与最终镜像不受影响。
 # 失败文案统一用 "ERROR:" 前缀，不得写出带方括号的 ERROR 标记（注释里也不行）：
 # BuildKit 失败时按行号回显本文件上下文，该字样会被应用中心弹窗错误摘要误收（#109）。
+#
+# 安装后立刻裁掉 FFmpeg 用不到的依赖链（3.2 起，实测 arm64 trixie-slim）：
+# Debian 13 的 libavfilter10 硬依赖 libplacebo349，而 libplacebo 又链 libLLVM.so
+# （118MB）、libgallium（34MB）、libz3（26MB）——这三块 ffmpeg 的音频链路一次都
+# 碰不到（它们是 Vulkan/OpenGL 滤镜与着色器 JIT 用的）。apt 无法只装其中一部分，
+# 只能在安装后按前缀 purge。实测 /usr 从 491MB 降到 348MB（压缩后省约 57MB），
+# 而 mp3 编码、ffprobe、HLS fMP4 分片全部正常——下面紧跟的三行探针就是这个
+# 结论的构建期守卫：真删坏了会在这里直接构建失败，而不是等用户点播才发现。
+# 必须保留 libplacebo 与 libflite（libavfilter 直接 DT_NEEDED 它们，删了 ffmpeg
+# 连启动都做不到）。副作用：镜像内 dpkg 会留下「已删但被依赖」的记录，若日后在
+# 容器里手工 apt install 其它包，apt 可能提议把这三个装回来，属预期行为。
 RUN set -eu; \
     fix_dns() { \
         { \
@@ -69,7 +80,22 @@ RUN set -eu; \
     fi; \
     apt-get install -y --no-install-recommends ffmpeg supervisor ca-certificates unzip curl xz-utils; \
     if [ -n "${APT_MIRROR}" ]; then swap_apt_host "${APT_MIRROR}" 'http://deb.debian.org'; fi; \
-    rm -rf /var/lib/apt/lists/*
+    rm -rf /var/lib/apt/lists/*; \
+    _before="$(du -sm /usr | cut -f1)"; \
+    for pat in libllvm libgallium libz3; do \
+        dpkg -l 2>/dev/null | awk -v p="${pat}" '$1=="ii" && index($2,p)>0 {print $2}' \
+            | xargs -r dpkg --force-depends --purge || true; \
+    done; \
+    _after="$(du -sm /usr | cut -f1)"; \
+    echo "[INFO] 已裁掉 FFmpeg 用不到的 LLVM/mesa/z3 依赖链，/usr ${_before}MB -> ${_after}MB"; \
+    _left="$(dpkg -l 2>/dev/null | awk '$1=="ii" && (index($2,"libllvm")>0 || index($2,"libgallium")>0 || index($2,"libz3")>0) {print $2}' | tr '\n' ' ')"; \
+    if [ -n "${_left}" ]; then \
+        echo "ERROR: 巨型依赖链未裁干净，仍残留：${_left}" >&2; exit 1; \
+    fi; \
+    ffmpeg -hide_banner -loglevel error -y -f lavfi -i "sine=frequency=440:duration=1" \
+        -ac 1 -ar 24000 -b:a 32k /tmp/.ffprobe.mp3; \
+    ffprobe -v error -show_entries format=duration -of default=nw=1 /tmp/.ffprobe.mp3; \
+    rm -f /tmp/.ffprobe.mp3
 
 # Node 发行包同时校验官方 SHASUMS256；镜像仅改变下载源，不改变被校验的文件名。
 RUN set -eu; \
@@ -100,9 +126,20 @@ RUN set -eu; \
 
 # 六个服务的 Python 依赖并集（musicdl/lxmusic/webui/mp3api/meow/netease 走 Node；
 # 各自 requirements 独立演进，镜像统一安装）
+#
+# musicdl 单独分两步装（3.2 起）：`--no-deps` 装 SDK 本体，再用
+# requirements-runtime.txt 补运行期依赖。这样能跳过 musicdl 声明的两个巨型但
+# 一次都用不到的 wheel —— nodejs-wheel（aarch64 57.8MB，镜像里已有 Node v22）
+# 与 av/PyAV（约 42MB，自带一份 FFmpeg，只在 tidalutils 的 TYPE_CHECKING 里出现）。
+# 合计约 100MB（压缩后），功能零损失；详见 musicdl-service/requirements-runtime.txt。
+# 紧随其后的 import 断言是这条捷径的守卫：musicdl 若哪天在模块级真的 import 了
+# av，构建会立刻在这里失败。musicdl-service/test_runtime_requirements.py 负责
+# 盯着清单与 SDK 元数据的一致性。
+#
 # 构建容器 DNS 失败自愈同 apt 步骤（resolv.conf 改写不跨 RUN 层持久，需每步自带）；
 # 镜像源安装失败自动回退官方 PyPI 重试
 COPY musicdl-service/requirements.txt /srv/req.musicdl
+COPY musicdl-service/requirements-runtime.txt /srv/req.musicdl-runtime
 COPY lxmusic-service/requirements.txt /srv/req.lxmusic
 COPY webui-service/requirements.txt /srv/req.webui
 COPY mp3api-service/requirements.txt /srv/req.mp3api
@@ -115,12 +152,18 @@ RUN set -eu; \
         } > /tmp/resolv.fnmusic 2>/dev/null || true; \
         cat /tmp/resolv.fnmusic > /etc/resolv.conf 2>/dev/null || true; \
     }; \
+    install_deps() { \
+        pip install --no-cache-dir "$@" \
+            -r /srv/req.lxmusic -r /srv/req.webui -r /srv/req.mp3api -r /srv/req.meow || return 1; \
+        pip install --no-cache-dir --no-deps "$@" -r /srv/req.musicdl || return 1; \
+        pip install --no-cache-dir "$@" -r /srv/req.musicdl-runtime; \
+    }; \
     fix_dns; \
-    pip install --no-cache-dir -r /srv/req.musicdl -r /srv/req.lxmusic -r /srv/req.webui -r /srv/req.mp3api -r /srv/req.meow \
+    install_deps \
     || { echo "[WARN] pip 镜像源（${PIP_INDEX_URL}）安装失败，回退官方 PyPI 重试..." >&2; \
-         pip install --no-cache-dir -i https://pypi.org/simple \
-            -r /srv/req.musicdl -r /srv/req.lxmusic -r /srv/req.webui -r /srv/req.mp3api -r /srv/req.meow; } \
-    && rm -f /srv/req.*
+         install_deps -i https://pypi.org/simple; }; \
+    python -c 'import musicdl.modules.sources, musicdl.modules.utils'; \
+    rm -f /srv/req.*
 
 RUN groupadd -g 1000 appuser \
     && useradd -m -u 1000 -g 1000 appuser \

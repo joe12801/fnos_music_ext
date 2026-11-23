@@ -451,7 +451,8 @@ def test_dockerfile_network_fallback_resilience():
     # 双源失败时必须报告备用 DNS 注入是否真正生效，区分「注入失败」与「源不可达」
     assert "注入未生效" in apt_step
     # pip 步骤：同样自带 DNS 自愈（resolv.conf 改写不跨 RUN 层）+ 官方 PyPI 回退
-    pip_step = text.split("# 五个服务的 Python 依赖并集")[1]
+    # 分节标记跟随 Dockerfile 注释（服务数已从五个增到六个，标记必须同步）
+    pip_step = text.split("# 六个服务的 Python 依赖并集")[1]
     assert "getent hosts" not in pip_step
     assert "223.5.5.5" in pip_step
     assert "https://pypi.org/simple" in pip_step

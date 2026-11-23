@@ -6,6 +6,18 @@
 ## [Unreleased]
 
 ### 新增
+- 第五音源 `meow` 支持**按上游音源逐个接入**：新增 `MEOW_SOURCES`（逗号分隔，
+  如 `kuwo,bilibili,ximalaya`）。配置后 `meow-service` 按音源并发请求上游
+  `/api/search?source=<键名>`，结果按「歌名+歌手」跨源去重合并，`/sources`
+  如实列出 `meow-<键名>`，`/search?sources=meow-bilibili` 可临时只搜一家。
+  默认留空 = 只用上游自己的聚合搜索，与旧版行为逐字一致。
+  支持键名：`kuwo` `netease` `kugou` `qq` `ximalaya` `fivesing` `lizhi`
+  `bilibili` `qishui` `ext`（详见 [适配器文档](meow-service/README.md)）。
+- 修复 meow 源「搜得到但放错内容」：上游 `/api/search` 每条结果自带 `url`，
+  其中已钉好 `xid`（喜马拉雅 trackId / 5sing `fs:` / 荔枝 `lz:`）或 `bv`（B 站）。
+  适配器现在把这两个参数编码进条目 id（仅白名单，其它参数不透传），`/stream`
+  原样带到 `/stream_live`。此前只转发歌名+歌手，同名播客会被解析成同名歌曲、
+  B 站不同现场版会互相串台。id 仍为可逆 base64url，旧的两段式 id 继续可用。
 - 第四类主音源 `mp3api`：接入自建 Music MP3 API（yt-dlp 搜索/下载 + ffmpeg 转码 + 本地缓存）。
   新增 `mp3api-service/` 适配器，把上游 API 包装成 musicdl 兼容 HTTP 契约
   （`/healthz` `/sources` `/search` `/info` `/stream`），条目标记为
@@ -32,6 +44,26 @@
   未启用时 `get_musicdl_client()` 仍指向原 musicdl，原三音源行为零变化。
 - 代理运行期切源会按 `base_url` 变化重建 HTTP client，秒级生效；上游不可达时
   `/healthz` 如实反映 `upstream_status`，不伪装健康。
+
+### 体积（镜像与安装包瘦身，约 -30%）
+- **FFmpeg 依赖链裁剪**：Debian 13 的 `libavfilter10` 硬依赖 `libplacebo349`，后者又链
+  `libLLVM.so`（118MB）、`libgallium`（34MB）、`libz3`（26MB）——全是 Vulkan/OpenGL
+  滤镜与着色器 JIT 用的，音频链路一次都碰不到。apt 无法只装一部分，改为安装后按前缀
+  `dpkg --force-depends --purge`。实测（arm64 trixie-slim）`/usr` 491MB → 348MB。
+  镜像构建时立刻用 `ffmpeg` 编一段 MP3 + `ffprobe` 读时长做守卫，裁坏了直接构建失败。
+  `libplacebo` / `libflite` 必须保留（`libavfilter` 直接 DT_NEEDED）。
+- **剔除 musicdl 两个巨型但用不到的 wheel**：`nodejs-wheel`（aarch64 57.8MB，镜像已装
+  Node v22、飞牛自带 nodejs_v26）与 `av`/PyAV（约 42MB，自带一份 FFmpeg，只在
+  `tidalutils` 的 `TYPE_CHECKING` 里出现）。改为 `--no-deps` 装 SDK + 新增
+  `musicdl-service/requirements-runtime.txt` 补运行期依赖，容器与原生安装同步生效；
+  构建期 `import musicdl.modules.sources` 断言 + `test_runtime_requirements.py`
+  与 SDK 元数据比对，保证不漏依赖。合计约 100MB（压缩后），功能零损失。
+- **原生安装同步瘦身**：`ensure_sources_native.sh` 采用同样的两步安装，并在装完后
+  `pip uninstall` 掉旧 venv 里遗留的 `nodejs-wheel`/`av`；`FNMUSIC_DEPS_REVISION`
+  递增以强制存量机器重建。
+- **FPK 镜像归档 `gzip -6` → `-9`**：归档占 fpk 体积九成以上，多花的 CPU 换几个百分点值得。
+- 顺带修掉 `ensure_sources_native.sh` 依赖校验里过时的 `PIL` 断言（二维码早已改用
+  SVG 无 PIL 渲染）：此前它会令原生安装的校验步骤恒失败、且依赖状态永不命中缓存。
 
 ## [3.1.2] - 2026-11-19
 

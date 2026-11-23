@@ -1,0 +1,54 @@
+# musicdl 2.14.2 的**运行期**依赖：等价于 `pip install musicdl==2.14.2` 自动解析
+# 出来的依赖树，只剔除两个体积巨大但本服务一次都用不到的 wheel。
+#
+# 为什么不能直接用 requirements.txt 装：
+#   * nodejs-wheel / nodejs-wheel-binaries —— aarch64 wheel 单份 57.8MB（x86_64
+#     58.3MB）。musicdl 里唯一的用处是 youtubeutils 的
+#     `shutil.which("node") or shutil.which("nodejs")`——找一个系统 Node 去跑
+#     YouTube 的 JS 协商。而镜像里已经装了 Node v22（`/usr/local/bin/node`），
+#     飞牛宿主机也自带 nodejs_v26，再装一份纯属重复。
+#   * av（PyAV）—— wheel 自带一份完整的 FFmpeg 共享库，aarch64 约 42MB /
+#     x86_64 约 38MB（压缩后）。musicdl 只在 tidalutils.py 的
+#     `if TYPE_CHECKING:` 分支里 `import av`，运行期从不使用；真正的转封装走
+#     系统 ffmpeg（`shutil.which("ffmpeg")`），容器里由 apt 提供、宿主由
+#     ensure_sources_native.sh 检查。
+#
+# 两者合计约 100MB（压缩后），功能零损失。
+#
+# 升级 musicdl 时请重新核对本清单：
+#   pip show musicdl          # 看 Requires: 一行
+#   pip install -q --dry-run --ignore-installed musicdl==<新版本> --report - | ...
+# musicdl-service/test_runtime_requirements.py 在能读到 SDK 元数据时会自动比对，
+# 漏项会直接测试失败，不需要靠人盯。
+
+click>=8.0.0,<9
+json-repair>=0.58.6,<1
+prettytable>=3.17.0,<4
+pycryptodomex>=3.23.0,<4
+pycryptodome>=3.23.0,<4
+orjson>=3.11.8,<4
+requests>=2.32.5,<3
+cryptography>=46.0.5,<47
+fake-useragent>=2.2.0,<3
+pathvalidate>=3.3.1,<4
+rich>=14.3.3,<15
+emoji>=2.15.0,<3
+bleach>=6.3.0,<7
+beautifulsoup4>=4.14.3,<5
+aigpy==2022.7.8.1
+tabulate>=0.10.0,<1
+mutagen>=1.47.0,<2
+ytmusicapi>=1.11.5,<2
+m3u8>=6.0.0,<7
+pywidevine>=1.9.0,<2
+tinytag>=2.2.1,<3
+curl-cffi>=0.14.0,<1
+platformdirs>=4.9.4,<5
+lxml>=6.0.2,<7
+prompt-toolkit>=3.0.52,<4
+brotli>=1.0.9,<2
+filetype>=1.2.0,<2
+puremagic>=1.30,<2; python_version < "3.12"
+puremagic>=2.1.1,<3; python_version >= "3.12"
+websocket-client>=1.8.0,<2
+typing-extensions>=4.16.0,<5

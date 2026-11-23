@@ -66,7 +66,8 @@ LXSERVER_DIR="${FNMUSIC_LXSERVER_DIR:-${BASE_DIR}/.lxserver}"
 LXSERVER_VERSION_FILE="${BASE_DIR}/container/lxserver.version"
 LXSERVER_ARTIFACT_DIR="${BASE_DIR}/container/lxserver-artifact"
 PIP_INDEX="${PIP_INDEX:-https://mirrors.tencent.com/pypi/simple/}"
-FNMUSIC_DEPS_REVISION="sources-20261019-1"
+# 依赖集合变更时递增，强制已装机器重跑一遍 pip（旧 venv 里躺着 nodejs-wheel / av）
+FNMUSIC_DEPS_REVISION="sources-20261123-1"
 FALLBACK_INDEXES="https://mirrors.aliyun.com/pypi/simple/ https://pypi.tuna.tsinghua.edu.cn/simple https://pypi.org/simple"
 APT_MIRROR="${FNMUSIC_APT_MIRROR:-}"
 
@@ -75,13 +76,29 @@ log_warn() { echo -e "\033[33m[WARN]\033[0m $*"; }
 log_err() { echo -e "\033[31m[ERROR]\033[0m $*" >&2; }
 
 # ---------------------------------------------------------------- 1. venv + pip
+# musicdl 拆两步装（3.2 起）：`--no-deps` 装 SDK 本体 + requirements-runtime.txt
+# 补运行期依赖，跳过 musicdl 声明的两个巨型但用不到的 wheel ——
+# nodejs-wheel（aarch64 57.8MB，飞牛自带 nodejs、镜像装 v22）与 av/PyAV
+# （约 42MB 自带一份 FFmpeg，只在 tidalutils 的 TYPE_CHECKING 里出现）。
+# 合计省约 100MB 磁盘，功能零损失；细节见 musicdl-service/requirements-runtime.txt。
+MUSICDL_REQ="${BASE_DIR}/musicdl-service/requirements.txt"
+MUSICDL_RUNTIME_REQ="${BASE_DIR}/musicdl-service/requirements-runtime.txt"
 REQ_FILES=(
-    "${BASE_DIR}/musicdl-service/requirements.txt"
+    "${MUSICDL_REQ}"
+    "${MUSICDL_RUNTIME_REQ}"
     "${BASE_DIR}/lxmusic-service/requirements.txt"
     "${BASE_DIR}/webui-service/requirements.txt"
     "${BASE_DIR}/mp3api-service/requirements.txt"
     "${BASE_DIR}/meow-service/requirements.txt"
 )
+# 交给 pip 的普通清单（musicdl 两项单独处理，见上）
+REQ_ARGS_FILES=()
+for req in "${REQ_FILES[@]}"; do
+    case "${req}" in
+        "${MUSICDL_REQ}"|"${MUSICDL_RUNTIME_REQ}") continue ;;
+    esac
+    REQ_ARGS_FILES+=("${req}")
+done
 for req in "${REQ_FILES[@]}"; do
     if [ ! -f "${req}" ]; then
         log_err "缺少依赖清单: ${req}"
@@ -122,7 +139,7 @@ fi
 REQ_DIGEST="$(deps_requirements_digest "${REQ_FILES[@]}")"
 if [ "${FNMUSIC_REFRESH_DEPS:-0}" != "1" ] \
    && deps_state_valid "${VENV_DIR}" "${FNMUSIC_DEPS_REVISION}" "${VENV_PYTHON}" \
-        "${REQ_DIGEST}" supervisor musicdl fastapi uvicorn httpx curl_cffi PIL qrcode multipart; then
+        "${REQ_DIGEST}" supervisor musicdl fastapi uvicorn httpx curl_cffi qrcode multipart; then
     log_info "音源服务 Python 依赖已就绪，跳过联网安装。"
     SKIP_PIP_INSTALL=1
 fi
@@ -135,7 +152,7 @@ for idx in ${FALLBACK_INDEXES}; do
 done
 
 REQ_ARGS=()
-for req in "${REQ_FILES[@]}"; do
+for req in "${REQ_ARGS_FILES[@]}"; do
     REQ_ARGS+=("-r" "${req}")
 done
 if [ "${SKIP_PIP_INSTALL:-0}" != "1" ]; then
@@ -144,7 +161,9 @@ if [ "${SKIP_PIP_INSTALL:-0}" != "1" ]; then
     for idx in ${candidates}; do
         log_info "尝试 pip 源: ${idx}"
         if "${PIP_BIN}" install -q -U pip --retries 2 --timeout 30 -i "${idx}" \
-           && "${PIP_BIN}" install -q supervisor "${REQ_ARGS[@]}" --retries 2 --timeout 30 -i "${idx}"; then
+           && "${PIP_BIN}" install -q supervisor "${REQ_ARGS[@]}" --retries 2 --timeout 30 -i "${idx}" \
+           && "${PIP_BIN}" install -q --no-deps "${MUSICDL_REQ}" --retries 2 --timeout 30 -i "${idx}" \
+           && "${PIP_BIN}" install -q "${MUSICDL_RUNTIME_REQ}" --retries 2 --timeout 30 -i "${idx}"; then
             ok_index="${idx}"
             break
         fi
@@ -157,11 +176,14 @@ if [ "${SKIP_PIP_INSTALL:-0}" != "1" ]; then
         exit 1
     fi
     if ! "${PIP_BIN}" check >/dev/null 2>&1 \
-       || ! deps_imports_ok "${VENV_PYTHON}" supervisor musicdl fastapi uvicorn httpx curl_cffi PIL qrcode multipart; then
+       || ! deps_imports_ok "${VENV_PYTHON}" supervisor musicdl fastapi uvicorn httpx curl_cffi qrcode multipart; then
         log_err "依赖安装后校验失败（pip check 或关键模块导入失败）。"
         exit 1
     fi
     deps_write_state "${VENV_DIR}" "${FNMUSIC_DEPS_REVISION}" "${VENV_PYTHON}" "${REQ_DIGEST}"
+    # 升级前装进 venv 的 nodejs-wheel / av 不会被 pip 自动移除，顺手回收（约
+    # 200MB 解压后空间）。清不掉也不影响运行，因此不判失败。
+    "${PIP_BIN}" uninstall -y -q nodejs-wheel nodejs-wheel-binaries av >/dev/null 2>&1 || true
     log_info "音源服务 Python 依赖安装完成（pip 源: ${ok_index}）。"
 fi
 

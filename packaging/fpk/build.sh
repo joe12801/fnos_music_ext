@@ -191,7 +191,9 @@ if [ "${IMAGE_ASSET_MODE}" != "skip" ]; then
         DOCKERFILE_SHA="$(sha256sum "${STAGE}/app/repo/container/Dockerfile" | awk '{print $1}')"
         ARCHIVE="${BUNDLE_DIR}/fnmusic-sources-image.tar.gz"
         echo "[fpk] docker save | gzip → ${ARCHIVE} ..."
-        docker save fnmusic-sources:latest | gzip "-${FPK_IMAGE_GZIP_LEVEL:-6}" > "${ARCHIVE}"
+        # 默认 -9：镜像归档占 fpk 体积的 90% 以上，多花的 CPU 换几个百分点值得
+        # （CI 打包一次几分钟，用户下载省几十 MB）。
+        docker save fnmusic-sources:latest | gzip "-${FPK_IMAGE_GZIP_LEVEL:-9}" > "${ARCHIVE}"
         ARCHIVE_SHA="$(sha256sum "${ARCHIVE}" | awk '{print $1}')"
         ARCHIVE_BYTES="$(stat -c %s "${ARCHIVE}")"
         # 镜像身份（image_id = config 摘要 / rootfs.diff_ids / 架构）直接从导出
