@@ -33,16 +33,22 @@ WORKDIR /srv
 # 失败文案统一用 "ERROR:" 前缀，不得写出带方括号的 ERROR 标记（注释里也不行）：
 # BuildKit 失败时按行号回显本文件上下文，该字样会被应用中心弹窗错误摘要误收（#109）。
 #
-# 安装后立刻裁掉 FFmpeg 用不到的依赖链（3.2 起，实测 arm64 trixie-slim）：
+# 安装后立刻清掉 FFmpeg 用不到的依赖链文件（3.2 起，实测 arm64 trixie-slim）：
 # Debian 13 的 libavfilter10 硬依赖 libplacebo349，而 libplacebo 又链 libLLVM.so
-# （118MB）、libgallium（34MB）、libz3（26MB）——这三块 ffmpeg 的音频链路一次都
-# 碰不到（它们是 Vulkan/OpenGL 滤镜与着色器 JIT 用的）。apt 无法只装其中一部分，
-# 只能在安装后按前缀 purge。实测 /usr 从 491MB 降到 348MB（压缩后省约 57MB），
-# 而 mp3 编码、ffprobe、HLS fMP4 分片全部正常——下面紧跟的三行探针就是这个
-# 结论的构建期守卫：真删坏了会在这里直接构建失败，而不是等用户点播才发现。
+# （118MB）、libgallium（33MB）、libz3（26MB）——这三块 ffmpeg 的音频链路一次都
+# 碰不到（它们是 Vulkan/OpenGL 滤镜与着色器 JIT 用的）。apt 无法只装其中一部分。
+#
+# 这里**只删文件、不 purge 包**，是有代价教训的：早先版本用
+# `dpkg --force-depends --purge`，省下的空间一样，但留下的 dpkg 记录会让
+# `apt-get check` 失败（mesa-libgallium 依赖 libllvm19、libglx-mesa0/libgbm1 又
+# 依赖 mesa-libgallium），此后容器里任何 apt 操作都被拒（"Unmet dependencies"），
+# 连构建期装 binutils 都会挂。改为删文件后包记录仍在，apt 依赖树始终自洽：
+# 实测 /usr 1068MB → 891MB（-177MB），同时 `apt-get check` 通过、可正常装包，
+# mp3 编码 / ffprobe / HLS fMP4 分片全部正常。
+# 下面紧跟的三道守卫就是这个结论的构建期保障：文件没清干净、或 apt 树被弄坏、
+# 或 ffmpeg 真的跑不起来，都会在这里直接构建失败，而不是等用户点播才发现。
 # 必须保留 libplacebo 与 libflite（libavfilter 直接 DT_NEEDED 它们，删了 ffmpeg
-# 连启动都做不到）。副作用：镜像内 dpkg 会留下「已删但被依赖」的记录，若日后在
-# 容器里手工 apt install 其它包，apt 可能提议把这三个装回来，属预期行为。
+# 连启动都做不到）。
 RUN set -eu; \
     fix_dns() { \
         { \
@@ -83,21 +89,29 @@ RUN set -eu; \
     rm -rf /var/lib/apt/lists/*; \
     _before="$(du -sm /usr | cut -f1)"; \
     for pat in libllvm libgallium libz3; do \
-        dpkg -l 2>/dev/null | awk -v p="${pat}" '$1=="ii" && index($2,p)>0 {print $2}' \
-            | xargs -r dpkg --force-depends --purge || true; \
+        for _pkg in $(dpkg -l 2>/dev/null | awk -v p="${pat}" '$1=="ii" && index($2,p)>0 {print $2}'); do \
+            for _f in $(dpkg -L "${_pkg}" 2>/dev/null | grep -E '^/usr/(lib|bin|share/doc)/' || true); do \
+                if [ -f "${_f}" ] || [ -L "${_f}" ]; then rm -f "${_f}"; fi; \
+            done; \
+        done; \
     done; \
     _after="$(du -sm /usr | cut -f1)"; \
-    echo "[INFO] 已裁掉 FFmpeg 用不到的 LLVM/mesa/z3 依赖链，/usr ${_before}MB -> ${_after}MB"; \
-    _left="$(dpkg -l 2>/dev/null | awk '$1=="ii" && (index($2,"libllvm")>0 || index($2,"libgallium")>0 || index($2,"libz3")>0) {print $2}' | tr '\n' ' ')"; \
-    if [ -n "${_left}" ]; then \
-        echo "ERROR: 巨型依赖链未裁干净，仍残留：${_left}" >&2; exit 1; \
-    fi; \
+    echo "[INFO] 已清掉 FFmpeg 用不到的 LLVM/mesa/z3 依赖链文件，/usr ${_before}MB -> ${_after}MB"; \
+    for _so in libLLVM libgallium libz3; do \
+        if [ -n "$(find /usr/lib -name "${_so}*" -print -quit 2>/dev/null)" ]; then \
+            echo "ERROR: 巨型依赖链未清干净，仍残留：${_so}*" >&2; exit 1; \
+        fi; \
+    done; \
+    apt-get check >/dev/null 2>&1 || { echo "ERROR: 清理后 apt 依赖树不一致，容器内将无法再装包" >&2; exit 1; }; \
     ffmpeg -hide_banner -loglevel error -y -f lavfi -i "sine=frequency=440:duration=1" \
         -ac 1 -ar 24000 -b:a 32k /tmp/.ffprobe.mp3; \
     ffprobe -v error -show_entries format=duration -of default=nw=1 /tmp/.ffprobe.mp3; \
     rm -f /tmp/.ffprobe.mp3
 
 # Node 发行包同时校验官方 SHASUMS256；镜像仅改变下载源，不改变被校验的文件名。
+# 注：官方二进制未 strip（.symtab/.debug_info 都在）。实测 strip 后 112MB→94MB，
+# 只省 18MB，却要额外装一轮 binutils（apt），并让镜像体积随构建机网络漂移，
+# 收益与确定性不成正比，故不做。
 RUN set -eu; \
     case "$(dpkg --print-architecture)" in \
         amd64) node_arch="x64" ;; \

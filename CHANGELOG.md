@@ -45,25 +45,34 @@
 - 代理运行期切源会按 `base_url` 变化重建 HTTP client，秒级生效；上游不可达时
   `/healthz` 如实反映 `upstream_status`，不伪装健康。
 
-### 体积（镜像与安装包瘦身，约 -30%）
-- **FFmpeg 依赖链裁剪**：Debian 13 的 `libavfilter10` 硬依赖 `libplacebo349`，后者又链
-  `libLLVM.so`（118MB）、`libgallium`（34MB）、`libz3`（26MB）——全是 Vulkan/OpenGL
-  滤镜与着色器 JIT 用的，音频链路一次都碰不到。apt 无法只装一部分，改为安装后按前缀
-  `dpkg --force-depends --purge`。实测（arm64 trixie-slim）`/usr` 491MB → 348MB。
-  镜像构建时立刻用 `ffmpeg` 编一段 MP3 + `ffprobe` 读时长做守卫，裁坏了直接构建失败。
-  `libplacebo` / `libflite` 必须保留（`libavfilter` 直接 DT_NEEDED）。
+### 体积（镜像与安装包瘦身，约 -34%）
+- **实测口径**：在同一台构建机、同 arm64 架构下，用改动前的 Dockerfile 与改动后各构建
+  一次完整镜像做对照——未压缩 1.94GB → 1.28GB，`gzip -6` 后（≈ fpk 里那份归档）
+  453MB → **302MB，减 151MB（-33%）**。旧镜像基线与此前从 registry 读到的 457MB 吻合。
 - **剔除 musicdl 两个巨型但用不到的 wheel**：`nodejs-wheel`（aarch64 57.8MB，镜像已装
   Node v22、飞牛自带 nodejs_v26）与 `av`/PyAV（约 42MB，自带一份 FFmpeg，只在
   `tidalutils` 的 `TYPE_CHECKING` 里出现）。改为 `--no-deps` 装 SDK + 新增
   `musicdl-service/requirements-runtime.txt` 补运行期依赖，容器与原生安装同步生效；
   构建期 `import musicdl.modules.sources` 断言 + `test_runtime_requirements.py`
-  与 SDK 元数据比对，保证不漏依赖。合计约 100MB（压缩后），功能零损失。
+  与 SDK 元数据比对，保证不漏依赖。旧镜像里这三个目录实测占 296MB，功能零损失。
+- **清掉 FFmpeg 用不到的依赖链文件**：Debian 13 的 `libavfilter10` 硬依赖
+  `libplacebo349`，后者又链 `libLLVM.so`（118MB）、`libgallium`（33MB）、`libz3`
+  （26MB）——全是 Vulkan/OpenGL 滤镜与着色器 JIT 用的，音频链路一次都碰不到。
+  apt 无法只装一部分。这里**只删文件、不 purge 包**：早先用
+  `dpkg --force-depends --purge` 省的空间一样，但会留下「已删却被依赖」的 dpkg 记录，
+  导致 `apt-get check` 失败、此后容器里任何 apt 操作都被拒（连构建期装 binutils 都会挂）。
+  改为删文件后包记录仍在，apt 依赖树始终自洽：实测 apt 阶段 `/usr` 578MB → 402MB，
+  且 `apt-get check` 通过、可正常装包，MP3 编码 / ffprobe / HLS fMP4 分片全部正常。
+  构建期三道守卫（文件没清干净 / apt 树被弄坏 / ffmpeg 跑不起来）任一触发即构建失败。
+  `libplacebo` / `libflite` 必须保留（`libavfilter` 直接 DT_NEEDED，删了 ffmpeg 起不来）。
 - **原生安装同步瘦身**：`ensure_sources_native.sh` 采用同样的两步安装，并在装完后
   `pip uninstall` 掉旧 venv 里遗留的 `nodejs-wheel`/`av`；`FNMUSIC_DEPS_REVISION`
   递增以强制存量机器重建。
 - **FPK 镜像归档 `gzip -6` → `-9`**：归档占 fpk 体积九成以上，多花的 CPU 换几个百分点值得。
 - 顺带修掉 `ensure_sources_native.sh` 依赖校验里过时的 `PIL` 断言（二维码早已改用
   SVG 无 PIL 渲染）：此前它会令原生安装的校验步骤恒失败、且依赖状态永不命中缓存。
+- 试过但**没采纳**：官方 Node 二进制未 strip，实测 strip 后 112MB→94MB 只省 18MB，
+  却要多装一轮 binutils、并让镜像体积随构建机网络漂移，收益与确定性不成正比。
 
 ## [3.1.2] - 2026-11-19
 
